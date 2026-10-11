@@ -1,0 +1,662 @@
+Game Design Brief — YARD BRAWL
+Working Title
+
+BassSpace Brawl
+
+Genre
+
+Physics-based multiplayer arena brawler / roguelite PvP
+
+Players
+
+2–8 players
+
+Platform
+
+PC / Steam
+
+Core Pitch
+
+Yard Brawl is a chaotic multiplayer physics shooter where 2–8 players fight inside a shared 3D house and backyard using shove-powered weapons, throwable objects, environmental hazards, and absurd player upgrades.
+
+The game combines the authoritative physics sandbox and proximity-voice multiplayer of the existing browser starter with the round-based escalation and build-crafting philosophy of ROUNDS.
+
+Every match starts relatively simple.
+
+Then somebody gets a card that makes their shove gun launch players across the yard.
+
+Someone else gets explosive balls.
+
+Another player becomes absurdly fast.
+
+Someone stacks bouncing projectiles with homing effects.
+
+By the final rounds, the house should look like it has been through a minor natural disaster.
+
+1. Core Gameplay Loop
+
+The fundamental loop is:
+
+FIGHT → WIN → CHOOSE UPGRADE → FIGHT AGAIN → STACK UPGRADES → FINAL BATTLE
+
+Each match consists of a series of short rounds.
+
+Before the match
+
+Players spawn into a shared house/yard lobby.
+
+They can:
+
+Throw objects
+Pick up furniture
+Mess with doors
+Bounce balls around
+Test their weapons
+Talk through proximity voice
+Generally cause problems
+
+When everyone is ready, the arena locks down and the round begins.
+
+2. The Round Structure
+
+Each round should take approximately:
+
+30–90 seconds
+
+A round ends when:
+
+Only one player remains, or
+A team wins, depending on game mode.
+
+The winner earns progression toward the next upgrade.
+
+After each round
+
+The arena briefly enters a Build Phase.
+
+Players receive a selection of randomized upgrade cards.
+
+For example:
+
+BIG YEET
+Your shove force is increased by 75%.
+
+or:
+
+RUBBER BULLET
+Projectiles bounce twice before disappearing.
+
+or:
+
+ANGRY BALL
+Thrown balls accelerate toward nearby players.
+
+or:
+
+DOOR SLAMMER
+Sliding doors launch players they hit.
+
+Players select one upgrade and immediately return to combat.
+
+3. The ROUNDS Inspiration
+
+The important part isn't directly copying ROUNDS.
+
+Instead, take its fundamental design philosophy:
+
+Simple base weapon + ridiculous modifiers
+
+The player's basic weapon should initially be extremely simple.
+
+For example:
+
+Shove Gun
+
+Instead of firing conventional bullets, it launches an extremely powerful physics impulse.
+
+At the beginning:
+
+PEW → shove
+
+After several upgrades:
+
+PEW → bouncing projectile → explosion → chain reaction → player flies through window → hits ball → ball hits another player → screaming
+
+The weapon itself remains recognizable while the modifiers dramatically change how it behaves.
+
+4. Weapon System
+
+The game's signature weapon is the Shove Gun.
+
+It doesn't primarily deal damage.
+
+It applies force.
+
+This makes the existing physics system the game's primary combat mechanic.
+
+Base Weapon
+
+Shove Gun
+
+Short/medium range
+Strong knockback
+Limited ammunition
+Reload time
+Physics-based projectile
+Can interact with props
+Can knock players through doors/windows
+Can launch objects
+
+The player doesn't necessarily kill opponents by reducing HP to zero.
+
+Instead, the primary objective is:
+
+GET THEM OUT OF THE ARENA.
+5. Arena Design
+
+The initial arena should be the existing:
+
+House + Backyard
+
+But the environment should be deliberately designed around physics combat.
+
+House
+
+Rooms could include:
+
+Living room
+Kitchen
+Garage
+Bedroom
+Bathroom
+Hallway
+Basement
+Front entrance
+Backyard
+Patio
+Pool
+Shed
+Trampoline
+Fence
+Trees
+Playground equipment
+Above-ground pool
+BBQ
+Garden furniture
+
+Every object should potentially become part of the fight.
+
+6. The Environment Is a Weapon
+
+One of the game's biggest differentiators should be:
+
+If it moves, it can probably hurt somebody.
+
+Players can interact with:
+
+Chairs
+Tables
+Trash cans
+Basketballs
+Boxes
+Bottles
+Buckets
+Toys
+Furniture
+Doors
+Balls
+Random household junk
+
+A player might grab a chair and throw it.
+
+Another player might shove the chair.
+
+The chair hits a door.
+
+The door opens.
+
+The door hits somebody.
+
+That player falls into the pool.
+
+That's the kind of emergent gameplay the game should encourage.
+
+7. Upgrade System
+
+Upgrades should modify physics, weapons, movement, projectiles, and environmental interaction.
+
+They should also stack.
+
+Projectile Upgrades
+
+BOUNCY
+
+Projectiles bounce off surfaces.
+
+TRIPLE SHOT
+
+Fire three projectiles.
+
+RICOCHET
+
+Projectiles automatically change direction after hitting something.
+
+HOMING
+
+Projectiles slightly track nearby players.
+
+BIG BALL
+
+Projectile size increased dramatically.
+
+EXPLOSIVE
+
+Projectiles create a powerful physics impulse on impact.
+
+Knockback Upgrades
+
+YEET
+
++50% knockback.
+
+MEGA YEET
+
++100% knockback.
+
+WALL BONK
+
+Hitting a wall creates another knockback pulse.
+
+CHAIN REACTION
+
+Knocking one player into another transfers some of the force.
+
+Movement Upgrades
+
+BUNNY HOP
+
+Gain additional air control.
+
+SUPER JUMP
+
+Massively increased jump force.
+
+AIR DASH
+
+Gain an additional midair dash.
+
+SLIPPERY
+
+Players retain horizontal momentum longer.
+
+ROCKET LEGS
+
+Jumping creates a downward shockwave.
+
+8. Weird Build Synergies
+
+The upgrade system should deliberately create ridiculous combinations.
+
+For example:
+
+Build A — "Pinball"
+Bouncy projectile
+Triple shot
+Ricochet
+Homing
+Increased projectile speed
+
+The player essentially turns the house into a pinball machine.
+
+Build B — "The Yeet Machine"
++100% shove force
+Faster reload
+Increased projectile size
+Wall Bonk
+Chain Reaction
+
+One hit can potentially send somebody across the entire backyard.
+
+Build C — "Ball Guy"
+Throwable objects deal more knockback
+Object size increased
+Objects bounce
+Objects become explosive
+Objects return to player
+
+Now the player barely even uses their gun.
+
+They're just throwing furniture.
+
+9. Physics-Based Health
+
+Rather than relying exclusively on traditional health bars, the game should use a combination of:
+
+Health + Impact + Arena Hazards
+
+Players can survive direct hits, but eventually they can be:
+
+Knocked into hazards
+Knocked outside the arena
+Thrown into dangerous environmental objects
+Launched into pits
+Knocked through destructible barriers
+
+This makes positioning extremely important.
+
+A player standing near the edge should feel nervous.
+
+10. Arena Hazards
+
+The arena can contain temporary or permanent hazards.
+
+Examples:
+
+Pool
+
+Falling into the pool temporarily removes the player from combat.
+
+Trampoline
+
+Players bounce extremely high.
+
+Garage Door
+
+Can open and close during combat.
+
+Lawn Mower
+
+Moves around the yard as an environmental hazard.
+
+Sprinklers
+
+Create slippery surfaces.
+
+Explosive Grill
+
+Occasionally becomes an extremely bad place to stand.
+
+Breakable Windows
+
+Players can be launched through them.
+
+11. Destruction
+
+The environment should progressively deteriorate during a match.
+
+Early round:
+
+Nice house.
+
+Late round:
+
+What the hell happened here?
+
+Possible destruction:
+
+Furniture gets knocked over
+Props scatter
+Doors get damaged
+Windows break
+Objects pile up
+Outdoor furniture gets launched everywhere
+
+This gives the match a visual progression.
+
+12. Proximity Voice
+
+The existing proximity voice system becomes an important social mechanic.
+
+Players can hear nearby opponents.
+
+This creates moments like:
+
+"Don't come in this room."
+
+BANG
+
+"OH SHIT."
+
+or:
+
+"I have absolutely no idea what this build does."
+
+three seconds later
+
+YEET
+
+Voice distance should change depending on the environment.
+
+Walls and doors can muffle voices.
+
+13. Multiplayer Modes
+Free For All
+
+2–8 players.
+
+Last player standing wins.
+
+This should be the default mode.
+
+Teams
+
+2v2
+3v3
+4v4
+
+Teams share victory.
+
+Chaos Mode
+
+Every round introduces an environmental modifier.
+
+Examples:
+
+Low gravity
+Giant heads
+Slippery floor
+Everything bounces
+Tiny arena
+Huge projectiles
+Random explosions
+Doors move extremely fast
+King of the Yard
+
+One player becomes the "King."
+
+Everyone else attempts to knock them out.
+
+The king receives a powerful build bonus.
+
+14. Match Progression
+
+A typical match might look like:
+
+Round 1
+
+Basic weapons.
+
+Simple physics brawl.
+
+↓
+
+Round 2
+
+First upgrades.
+
+Players begin specializing.
+
+↓
+
+Round 3
+
+More powerful builds.
+
+The arena starts getting destroyed.
+
+↓
+
+Round 4
+
+Build combinations become ridiculous.
+
+Physics chaos.
+
+↓
+
+Round 5
+
+Major upgrades.
+
+The house is barely recognizable.
+
+↓
+
+Final Round
+
+All remaining players fight with their accumulated builds.
+
+Maximum chaos.
+
+15. Important Design Principle
+
+The game should not become a traditional gun-based shooter.
+
+The core fantasy is:
+
+"I found a stupid combination of physics and upgrades, and now I can launch you through the neighbor's fence."
+
+The physics simulation should remain the star.
+
+The weapon system exists to manipulate the physics.
+
+The upgrade system exists to make those physics increasingly ridiculous.
+
+16. Visual Style
+
+The game should use a stylized, slightly exaggerated 3D aesthetic.
+
+Think:
+
+Clean shapes
+Bright readable environments
+Exaggerated physics
+Comedic animations
+Large impact effects
+Strong hit feedback
+
+Avoid overly realistic military aesthetics.
+
+The game should feel like a playground where somebody accidentally installed weapons.
+
+17. Sound Design
+
+Sound should heavily emphasize impact.
+
+Important sounds include:
+
+Weapon firing
+Heavy impacts
+Objects colliding
+Players hitting walls
+Doors slamming
+Glass breaking
+Balls bouncing
+Explosions
+Comedic player reactions
+
+The stronger the physics interaction, the bigger the sound should feel.
+
+18. Meta Progression
+
+To keep players coming back, matches can unlock:
+
+Player skins
+Weapon skins
+Projectile effects
+Emotes
+Voice effects
+Hats
+House decorations
+Victory animations
+
+Avoid making permanent progression increase combat power.
+
+The match itself should determine power.
+
+That keeps games competitive.
+
+19. Technical Design Philosophy
+
+The existing multiplayer architecture is actually an excellent foundation.
+
+The authoritative server should control:
+
+Player movement
+Physics
+Projectile spawning
+Collision
+Knockback
+Object interaction
+Damage
+Round state
+Upgrade effects
+Victory conditions
+
+Clients should primarily handle:
+
+Input
+Camera
+Visual effects
+UI
+Audio
+Local prediction where appropriate
+
+This is particularly important because physics-based multiplayer becomes extremely frustrating if clients disagree about where objects are.
+
+20. MVP
+
+The first playable Steam build should not attempt to implement 100 upgrades.
+
+A strong MVP would contain:
+
+Multiplayer
+2–8 players
+Lobby
+Ready system
+Proximity voice
+Arena
+House
+Backyard
+Pool
+Basic environmental objects
+Doors
+Breakable windows
+Combat
+Shove gun
+Throwable props
+Bouncy balls
+Basic knockback
+Out-of-bounds elimination
+Round System
+Countdown
+Round start
+Round end
+Winner detection
+Upgrade selection
+Next round
+Upgrades
+
+Start with around 20–30 cards.
+
+Enough to create interesting combinations without making balancing impossible.
+
+The Core Fantasy
+
+The elevator pitch should ultimately be:
+
+Yard Brawl is a physics-based multiplayer brawler where 2–8 players fight through a destructible house and backyard, grabbing ridiculous upgrades between rounds and turning simple shove guns into completely broken weapons.
+
+Or, in Steam-store language:
+
+Grab your friends, pick an upgrade, and start throwing each other through the walls. Yard Brawl is a chaotic 2–8 player physics arena brawler where every round makes your weapons more ridiculous, your builds more broken, and the house progressively more fucked.

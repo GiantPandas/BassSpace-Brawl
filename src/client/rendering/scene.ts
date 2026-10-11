@@ -1,0 +1,1882 @@
+import * as THREE from "three";
+import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
+import { clone } from "three/addons/utils/SkeletonUtils.js";
+import { CHARACTER_PALETTE, DOORS, GRILL, LEVEL, MOWER, PALETTE, PROPS, SLIP, WINDOWS, type PropKind, type Vec3 } from "../../shared/level";
+import { PELLET_ID_BASE, type DoorState, type WindowState } from "../../shared/simulation";
+import { cardBit } from "../../shared/upgrades";
+import {
+  DEFAULT_COSMETICS,
+  EMOTES,
+  SKINS,
+  type Cosmetics,
+} from "../../shared/cosmetics";
+import type { PlayerState, PropState } from "../../shared/protocol";
+type Avatar = {
+  root: THREE.Group;
+  mixer: THREE.AnimationMixer;
+  actions: Map<string, THREE.AnimationAction>;
+  current: string;
+  label: HTMLDivElement;
+  /** The palette index this avatar was tinted with (for live skin swaps). */
+  color: number;
+  /** The hat currently worn, if any. Clones share the proto's geometry. */
+  hatGroup?: THREE.Group | null;
+  /** The emote being performed, or null. `start` is a performance.now() ms. */
+  emote?: { id: string; start: number } | null;
+  /** The player this avatar renders (cosmetic lookup key). */
+  id: number;
+  nameEl?: HTMLElement;
+  hp?: HTMLElement;
+  out?: HTMLElement;
+  pool?: HTMLElement;
+  king?: HTMLElement;
+  driven: Driven[];
+  armL?: Driven;
+  armR?: Driven;
+  head?: Driven;
+  jaw?: Driven;
+  loudness: number;
+  speaking: boolean;
+  mouth: number;
+};
+type PreviewPerformer = {
+  avatar: Avatar;
+  home: THREE.Vector3;
+  phase: number;
+};
+/** A bone the runtime aims by hand, plus the pose the mixer last gave it. */
+type Driven = { bone: THREE.Object3D; posed: THREE.Quaternion };
+/**
+ * The lobby camera orbits this point. OVERVIEW is the resting framing the landing page was
+ * composed around; the drift, the visitor's drag and the arrival flight all ride on top of it.
+ */
+const FOCUS = new THREE.Vector3(7.1, 0.8, -0.8);
+const OVERVIEW = { yaw: 0.632, pitch: 0.46, dist: 14 };
+/** How far a visitor may swing the camera before it stops giving. */
+const SWING = { yaw: 0.62, pitch: [0.28, 0.82], dist: [11, 24] };
+const ARRIVAL = 2.4;
+const MOUTH_OPEN = 0.5;
+const HEAD_TILT = 0.55;
+const HOLD_LIFT = -1.1;
+const THIRD_PERSON_DISTANCE = 4.2;
+const THIRD_PERSON_PADDING = 0.18;
+const HINGE_AXIS = new THREE.Vector3(1, 0, 0);
+const LOBBY_SKY = new THREE.Color("#f0f4ee");
+const GAME_SKY = new THREE.Color("#b9d9e8");
+const spin = new THREE.Quaternion();
+function driven(character: THREE.Object3D, name: string): Driven | undefined {
+  const bone = character.getObjectByName(name);
+  return bone && { bone, posed: bone.quaternion.clone() };
+}
+/**
+ * Hand off to the mixer and take the result back. The mixer skips writing a track whose
+ * value has not changed since the last frame, so a bone we aimed ourselves would come back
+ * still carrying our offset; putting its last mixer pose back first keeps offsets from
+ * compounding into an endless spin.
+ */
+function repose(a: Avatar, dt: number) {
+  for (const d of a.driven) d.bone.quaternion.copy(d.posed);
+  a.mixer.update(dt);
+  for (const d of a.driven) d.posed.copy(d.bone.quaternion);
+}
+/**
+ * Turn a bone about its own X axis, on top of the pose the mixer gave it. These bones have
+ * non-identity rest rotations, so assigning `rotation.x` would compose the offset against a
+ * stale Euler decomposition and swing the limb the wrong way.
+ */
+function hinge(d: Driven | undefined, angle: number) {
+  d?.bone.quaternion
+    .copy(d.posed)
+    .multiply(spin.setFromAxisAngle(HINGE_AXIS, angle));
+}
+/** Jittery 0..1 babble, used when a speaker's level cannot be metered locally. */
+function chatter(t: number, seed: number) {
+  return Math.min(
+    1,
+    Math.abs(
+      Math.sin(t * 13.1 + seed) *
+        Math.sin(t * 7.7 + seed * 1.7) *
+        Math.sin(t * 3.3 + seed * 0.4),
+    ) * 1.9,
+  );
+}
+export class GameScene {
+  renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    powerPreference: "high-performance",
+  });
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(68, 1, 0.04, 100);
+  props = new Map<number, THREE.Group>();
+  doors = new Map<number, THREE.Group>();
+  windows = new Map<number, { glass: THREE.Mesh; root: THREE.Group }>();
+  /** Shards from shattered panes; they spray out and delete themselves. */
+  private shards: { mesh: THREE.Mesh; vel: THREE.Vector3; spin: THREE.Vector3; life: number; ttl: number }[] = [];
+  /** Muzzle flashes, tracers and impact sparks; they fade out and delete themselves. */
+  effects: { mesh: THREE.Mesh; life: number; ttl: number; shrink: boolean; grow?: number }[] = [];
+  private propBases = new Map<number, { position: THREE.Vector3; rotation: THREE.Quaternion }>();
+  private propUses = new Map<number, { kind: PropKind; started: number }>();
+  avatars = new Map<number, Avatar>();
+  /** Last cosmetics seen per player; applied when the avatar (re)appears. */
+  private cosmeticCache = new Map<number, Cosmetics>();
+  /** Built-once hat groups that every wearer's clone shares geometry with. */
+  private hatProtos: Map<string, THREE.Group> | null = null;
+  /** Active chaos env modifier ("none" off) — giant heads scale the head. */
+  env = "none";
+  /** King of the Yard: the id wearing the crown, 0 for none. */
+  kingId = 0;
+  /** Live pellet meshes (ids ≥ PELLET_ID_BASE); they share one geometry and material. */
+  pellets = new Map<number, THREE.Mesh>();
+  private pelletGeo = new THREE.SphereGeometry(0.09, 8, 6);
+  private pelletMat = new THREE.MeshBasicMaterial({ color: "#ffcf8a", toneMapped: false });
+  asset?: GLTF;
+  playing = false;
+  front: THREE.Object3D[] = [];
+  highlight = 0;
+  labels: HTMLDivElement;
+  clock = 0;
+  loaded: Promise<void>;
+  preview: THREE.Group[] = [];
+  private previewCast: PreviewPerformer[] = [];
+  /** True while a visitor is dragging the lobby camera; suspends the pointer parallax. */
+  private dragging = false;
+  /** Visitor-owned offsets from OVERVIEW, the spin left over from a release, and the drift. */
+  private swung = { yaw: 0, pitch: 0, dist: 0 };
+  private coasting = { yaw: 0, pitch: 0 };
+  private parallax = { x: 0, y: 0, wantX: 0, wantY: 0 };
+  private drift = 0;
+  private arrival = 0;
+  private calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  private cameraRay = new THREE.Ray();
+  private cameraBox = new THREE.Box3();
+  private cameraHit = new THREE.Vector3();
+  private cameraSize = new THREE.Vector3();
+  private cameraFocus = new THREE.Vector3();
+  private cameraBoom = new THREE.Vector3();
+  /** Distant outdoor scenery is not part of the landing-page dollhouse composition. */
+  private horizon = new THREE.Group();
+  /** The lawn mower, driven by the authority's 10 Hz position broadcasts. */
+  private mowerRoot = new THREE.Group();
+  private mowerBlade: THREE.Mesh | null = null;
+  private mowerTarget: { x: number; z: number } | null = null;
+  constructor(container: HTMLElement) {
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.setClearColor(LOBBY_SKY);
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.2;
+    container.append(this.renderer.domElement);
+    this.labels = document.createElement("div");
+    this.labels.className = "world-labels";
+    container.append(this.labels);
+    this.scene.fog = new THREE.Fog(LOBBY_SKY, 25, 65);
+    this.scene.add(new THREE.HemisphereLight("#f6eedb", "#728078", 2.3));
+    const sun = new THREE.DirectionalLight("#fff1c8", 3.2);
+    sun.position.set(-3, 19, -13);
+    sun.target.position.set(6, 0, -8);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    // The room, the hall, the workshop and the yard all sit under one shadow camera.
+    sun.shadow.camera.left = -32;
+    sun.shadow.camera.right = 32;
+    sun.shadow.camera.top = 32;
+    sun.shadow.camera.bottom = -32;
+    sun.shadow.normalBias = 0.03;
+    this.scene.add(sun, sun.target);
+    for (const b of LEVEL) {
+      const mesh = this.box(b.p, b.s, b.color);
+      if (b.hide) this.front.push(mesh);
+    }
+    // Floorboard seams, room divider, and practical fixtures are inexpensive geometry.
+    for (let x = -13.5; x < 14; x += 0.7)
+      this.box([x, 0.008, 0], [0.013, 0.012, 21.6], "#9f927d");
+    const rug = this.box([-8.5, 0.02, -5.8], [7, 0.025, 5.2], "#b45c41");
+    for (let i = 0; i < 5; i++)
+      this.box([-8.5, 0.04, -7.5 + i * 0.8], [6.5, 0.01, 0.035], "#dbb087");
+    for (const x of [-10, -4, 2, 8]) {
+      this.box([x, 5.55, 0], [0.18, 0.24, 22], "#756c57");
+      const lamp = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.2, 0.55, 0.25, 12),
+        new THREE.MeshStandardMaterial({
+          color: "#d4d5b7",
+          emissive: "#a5a97e",
+          emissiveIntensity: 0.35,
+        }),
+      );
+      lamp.position.set(x, 4.7, -1);
+      this.scene.add(lamp);
+      this.roomLight([x, 4.45, -1], 28, 10);
+      this.box([x, 5.1, -1], [0.035, 0.7, 0.035], "#3a4840");
+    }
+    for (const x of [-10, -5, 0]) {
+      this.box([x, 3.05, -10.75], [3.8, 2.5, 0.08], "#93ada1");
+      this.box([x, 3.05, -10.65], [0.08, 2.6, 0.14], "#e9e2cc");
+      this.box([x, 3.05, -10.65], [3.9, 0.08, 0.14], "#e9e2cc");
+      this.box([x, 1.75, -10.5], [4, 0.15, 0.45], "#e6ddc5");
+    }
+    this.sign(
+      "THE COMMON ROOM",
+      [-4, 2.3, -10.46],
+      4.1,
+      0.5,
+      "#405b4d",
+      "#e5deca",
+    );
+    this.sign(
+      "01  /  GATHER",
+      [-9, 3.2, 10.76],
+      4,
+      0.7,
+      "#4b6152",
+      "#d7cfbc",
+      Math.PI,
+    );
+    this.sign(
+      "02  /  THE HALL",
+      [5.23, 3.9, 0],
+      3,
+      0.45,
+      "#edebd7",
+      "#678276",
+      Math.PI / 2,
+    );
+    this.sign(
+      "MAKE SOMETHING\nWITH YOUR FRIENDS.",
+      [-13.76, 2.6, -2],
+      3.6,
+      1.5,
+      "#455a4b",
+      "#c2b18c",
+      Math.PI / 2,
+    );
+    for (const p of [
+      [-12.3, 0, -9.2],
+      [-12.4, 0, 5],
+      [3.7, 0, -9],
+      [12.5, 0, 8],
+    ])
+      this.plant(p[0], p[2]);
+    this.box([-0.3, 0.04, 3.8], [4, 0.035, 0.06], "#e6dcc7");
+    this.box([-2.3, 0.04, 4.8], [0.06, 0.035, 2], "#e6dcc7");
+    this.box([1.7, 0.04, 4.8], [0.06, 0.035, 2], "#e6dcc7");
+    const board = this.box([-3, 1.65, 8.5], [2.4, 2.8, 0.15], "#556c5b");
+    this.box([-4, 0.7, 8.5], [0.09, 1.4, 0.3], "#6c5c46");
+    this.box([-2, 0.7, 8.5], [0.09, 1.4, 0.3], "#6c5c46");
+    this.sign(
+      "A LITTLE SPACE\nFOR BIG NONSENSE",
+      [-3, 1.8, 8.39],
+      2,
+      1.1,
+      "#ede5cc",
+      "#556c5b",
+      Math.PI,
+    );
+    this.workshop();
+    this.yard();
+    this.makeMower();
+    this.outdoorHorizon();
+    PROPS.forEach((prop, i) => {
+      const root = this.makeProp(i);
+      root.position.set(...prop.p);
+      this.props.set(i + 1, root);
+      this.scene.add(root);
+    });
+    for (const def of DOORS) {
+      const leaf = new THREE.Group();
+      const panel = new THREE.Mesh(
+        new THREE.BoxGeometry(...def.s),
+        new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.7 }),
+      );
+      panel.castShadow = true;
+      panel.receiveShadow = true;
+      leaf.add(panel);
+      // A handle on the long face, so a shut leaf reads as something to open.
+      const across = def.s[0] > def.s[2];
+      const handle = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          across ? 0.09 : def.s[0] + 0.06,
+          0.5,
+          across ? def.s[2] + 0.06 : 0.09,
+        ),
+        new THREE.MeshStandardMaterial({
+          color: "#2f3a34",
+          roughness: 0.4,
+          metalness: 0.5,
+        }),
+      );
+      handle.position.set(
+        across ? (def.slide[0] > 0 ? -def.s[0] / 2 + 0.22 : def.s[0] / 2 - 0.22) : 0,
+        0,
+        across ? 0 : def.slide[2] > 0 ? -def.s[2] / 2 + 0.22 : def.s[2] / 2 - 0.22,
+      );
+      leaf.add(handle);
+      leaf.position.set(...def.p);
+      this.doors.set(def.id, leaf);
+      this.scene.add(leaf);
+    }
+    for (const def of WINDOWS) {
+      const root = new THREE.Group();
+      root.position.set(...def.p);
+      const glass = new THREE.Mesh(
+        new THREE.BoxGeometry(def.s[0], def.s[1], 0.06),
+        new THREE.MeshStandardMaterial({
+          color: "#bfe3e8",
+          roughness: 0.1,
+          metalness: 0.05,
+          transparent: true,
+          opacity: 0.35,
+        }),
+      );
+      root.add(glass);
+      const fw = def.s[0],
+        fh = def.s[1],
+        fd = def.s[2],
+        t = 0.14;
+      const frameMat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.7 });
+      for (const [px, py, sx, sy] of [
+        [0, fh / 2 + t / 2, fw + 2 * t, t],
+        [0, -fh / 2 - t / 2, fw + 2 * t, t],
+        [-(fw / 2 + t / 2), 0, t, fh],
+        [fw / 2 + t / 2, 0, t, fh],
+      ] as const) {
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, fd), frameMat);
+        bar.position.set(px, py, 0);
+        bar.castShadow = true;
+        root.add(bar);
+      }
+      this.windows.set(def.id, { glass, root });
+      this.scene.add(root);
+    }
+    this.loaded = new GLTFLoader()
+      .loadAsync(new URL("models/common-worker.glb", document.baseURI).href)
+      .then((asset) => {
+        this.asset = asset;
+        const cast = [
+          { p: [5.8, 0, -0.1], color: 2, phase: 2.75 },
+          { p: [7.1, 0, -2.15], color: 1, phase: 4.85 },
+          { p: [8.5, 0, -0.1], color: 3, phase: 0.65 },
+        ] as const;
+        for (const [i, performer] of cast.entries()) {
+          const a = this.avatar(60000 + i, "", performer.color);
+          const home = new THREE.Vector3(...performer.p);
+          a.root.position.copy(home);
+          a.label.style.display = "none";
+          this.preview.push(a.root);
+          this.previewCast.push({ avatar: a, home, phase: performer.phase });
+        }
+        this.animatePreview(0);
+      });
+    addEventListener("resize", () => this.resize());
+    this.resize();
+    this.overview(0);
+  }
+  box(p: number[], s: number[], color: string) {
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(...(s as [number, number, number])),
+      new THREE.MeshStandardMaterial({ color, roughness: 0.85 }),
+    );
+    m.position.set(...(p as [number, number, number]));
+    m.castShadow = true;
+    m.receiveShadow = true;
+    this.scene.add(m);
+    return m;
+  }
+  /** A practical fixture's warm pool of light. Kept shadowless to stay cheap on 8-player GPUs. */
+  roomLight(p: [number, number, number], intensity: number, distance: number) {
+    const light = new THREE.PointLight("#ffe4ad", intensity, distance, 2);
+    light.position.set(...p);
+    this.scene.add(light);
+    return light;
+  }
+  sign(
+    text: string,
+    p: number[],
+    w: number,
+    h: number,
+    ink: string,
+    bg: string,
+    rotation = 0,
+  ) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1024;
+    canvas.height = 512;
+    const c = canvas.getContext("2d")!;
+    c.fillStyle = bg;
+    c.fillRect(0, 0, 1024, 512);
+    c.fillStyle = ink;
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.font = "600 64px monospace";
+    const lines = text.split("\n");
+    lines.forEach((line, i) =>
+      c.fillText(line, 512, 256 + (i - (lines.length - 1) / 2) * 95, 970),
+    );
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, h),
+      new THREE.MeshStandardMaterial({ map: tex, roughness: 1 }),
+    );
+    mesh.position.set(...(p as [number, number, number]));
+    mesh.rotation.y = rotation;
+    this.scene.add(mesh);
+  }
+  plant(x: number, z: number) {
+    const pot = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.38, 0.27, 0.6, 10),
+      new THREE.MeshStandardMaterial({ color: "#b97554" }),
+    );
+    pot.position.set(x, 0.3, z);
+    pot.castShadow = true;
+    this.scene.add(pot);
+    for (let i = 0; i < 7; i++) {
+      const leaf = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(0.5, 0),
+        new THREE.MeshStandardMaterial({
+          color: i % 2 ? "#647b49" : "#7a9158",
+        }),
+      );
+      leaf.scale.set(0.5, 1.3, 0.55);
+      leaf.position.set(
+        x + Math.sin(i * 2.4) * 0.25,
+        0.8 + (i % 3) * 0.24,
+        z + Math.cos(i * 2.4) * 0.25,
+      );
+      leaf.rotation.z = Math.sin(i) * 0.5;
+      leaf.castShadow = true;
+      this.scene.add(leaf);
+    }
+  }
+  /** Decoration for the workshop east of the hall. Geometry only, no colliders. */
+  workshop() {
+    for (const z of [-6, 0, 6]) this.box([22, 5.5, z], [16, 0.22, 0.2], "#8d8069");
+    for (const [x, z] of [
+      [17, -8.6],
+      [22, -8.6],
+      [26.5, -1.6],
+      [27, -5.5],
+    ]) {
+      const lamp = new THREE.Mesh(
+        new THREE.BoxGeometry(1.1, 0.16, 0.5),
+        new THREE.MeshStandardMaterial({
+          color: "#e6e3c8",
+          emissive: "#c9c38c",
+          emissiveIntensity: 0.5,
+        }),
+      );
+      lamp.position.set(x, 4.3, z);
+      this.scene.add(lamp);
+      this.roomLight([x, 4.12, z], 25, 9);
+    }
+    // A pegboard of tool silhouettes over the bench.
+    this.box([18, 2.6, -8.7], [6.4, 2.4, 0.1], "#7d8f86");
+    for (let i = 0; i < 9; i++)
+      this.box(
+        [15.4 + i * 0.65, 2.4 + (i % 3) * 0.55, -8.62],
+        [i % 2 ? 0.12 : 0.34, i % 2 ? 0.9 : 0.16, 0.06],
+        "#3f4a44",
+      );
+    for (let i = 0; i < 4; i++)
+      this.box([16.2 + i * 1.2, 1.02, -6], [0.5, 0.24, 0.9], "#4d5a52");
+    // The mezzanine reading corner, and a lamp over the stair head.
+    this.box([10.6, 3.05, -4.4], [1.2, 0.45, 1.6], "#6d5c44");
+    this.box([10.6, 3.35, -3.55], [1.2, 0.6, 0.14], "#6d5c44");
+    const glow = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.42, 0.22, 12),
+      new THREE.MeshStandardMaterial({
+        color: "#d4d5b7",
+        emissive: "#a5a97e",
+        emissiveIntensity: 0.4,
+      }),
+    );
+    glow.position.set(12, 4.5, -6.5);
+    this.scene.add(glow);
+    this.roomLight([12, 4.3, -6.5], 22, 8);
+    this.box([12, 5.15, -6.5], [0.035, 1.1, 0.035], "#3a4840");
+    this.sign(
+      "05  /  THE MEZZANINE",
+      [9.66, 3.35, -5.7],
+      2.6,
+      0.4,
+      "#edebd7",
+      "#4e5f56",
+      -Math.PI / 2,
+    );
+    this.sign(
+      "03  /  THE WORKSHOP",
+      [13.55, 3.75, 0],
+      3,
+      0.45,
+      "#edebd7",
+      "#4e5f56",
+      -Math.PI / 2,
+    );
+    this.sign(
+      "TAKE ONE.\nMIND THE WINDOWS.",
+      [24.26, 4.1, -5.7],
+      1.5,
+      0.9,
+      "#e8e2cc",
+      "#5a6670",
+      Math.PI / 2,
+    );
+    this.sign(
+      "EVERYTHING HERE\nIS A LOAN.",
+      [29.76, 2.8, 3],
+      3.4,
+      1.4,
+      "#4a5a52",
+      "#c8bfa6",
+      -Math.PI / 2,
+    );
+    for (const p of [
+      [15.5, 0, 8],
+      [29, 0, 7.5],
+    ])
+      this.plant(p[0], p[2]);
+  }
+  /** Decoration for the yard: paint, planting, lights and a backboard. */
+  yard() {
+    for (const z of [-13.2, -22.8])
+      this.box([5, 0.07, z], [11.6, 0.02, 0.1], "#f2ece0");
+    for (const x of [-0.8, 10.8])
+      this.box([x, 0.07, -18], [0.1, 0.02, 9.6], "#f2ece0");
+    this.box([5, 0.07, -18], [11.6, 0.02, 0.1], "#f2ece0");
+    for (let i = 0; i < 26; i++) {
+      const a = (i / 26) * Math.PI * 2;
+      this.box(
+        [5 + Math.cos(a) * 2.6, 0.07, -18 + Math.sin(a) * 2.6],
+        [0.16, 0.02, 0.16],
+        "#f2ece0",
+      );
+    }
+    for (const [x, z] of [
+      [-11.5, -13.5],
+      [11.5, -13.5],
+      [-11.5, -24.5],
+      [11.5, -25],
+    ]) {
+      this.box([x, 0.3, z], [2.2, 0.6, 2.2], "#a4795a");
+      this.plant(x, z + 0.1);
+    }
+    // Festoon lights strung between the yard walls.
+    for (let i = 0; i <= 14; i++) {
+      const x = -12 + i * 1.72,
+        sag = Math.sin((i / 14) * Math.PI) * 0.5;
+      const bulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.09, 8, 6),
+        new THREE.MeshStandardMaterial({
+          color: "#fdf3d0",
+          emissive: "#f0dfa0",
+          emissiveIntensity: 0.9,
+        }),
+      );
+      bulb.position.set(x, 2.9 - sag, -14.5);
+      this.scene.add(bulb);
+      this.box([x, 3.02 - sag, -14.5], [1.75, 0.02, 0.02], "#5a5c50");
+    }
+    for (let i = 0; i < 40; i++) {
+      const x = -12 + ((i * 7.31) % 24),
+        z = -25.5 + ((i * 4.13) % 13);
+      if (x > -1.6 && x < 11.6 && z > -23.8 && z < -12.2) continue;
+      const tuft = new THREE.Mesh(
+        new THREE.ConeGeometry(0.16, 0.42, 5),
+        new THREE.MeshStandardMaterial({ color: i % 3 ? "#7f9463" : "#93a86f" }),
+      );
+      tuft.position.set(x, 0.21, z);
+      tuft.rotation.y = i;
+      this.scene.add(tuft);
+    }
+    const shedLight = new THREE.Mesh(
+      new THREE.SphereGeometry(0.12, 10, 7),
+      new THREE.MeshStandardMaterial({
+        color: "#fff4d1",
+        emissive: "#efd58c",
+        emissiveIntensity: 1.1,
+      }),
+    );
+    shedLight.position.set(-9.5, 2.35, -22);
+    this.scene.add(shedLight);
+    this.roomLight([-9.5, 2.18, -22], 13, 5);
+    this.box([-6, 0.95, -12.9], [9, 0.1, 0.12], "#6d5c44");
+    this.sign(
+      "04  /  THE YARD",
+      [3.25, 3.9, -10.46],
+      3.4,
+      0.5,
+      "#405b4d",
+      "#e5deca",
+    );
+    this.sign(
+      "04  /  THE YARD",
+      [3.25, 3.6, -11.24],
+      3.4,
+      0.5,
+      "#e5deca",
+      "#4b6152",
+      Math.PI,
+    );
+    this.sign(
+      "MIND THE\nBOUNCE.",
+      [0, 1.7, -25.76],
+      3,
+      1.2,
+      "#48594c",
+      "#cfc7b2",
+    );
+    this.sign(
+      "06  /  THE SHED",
+      [-9.7, 2.1, -19.68],
+      2.4,
+      0.4,
+      "#efe7cf",
+      "#6a5240",
+    );
+    // The pool's water: a visual surface that later phases will learn to be deadly.
+    const water = new THREE.Mesh(
+      new THREE.BoxGeometry(4, 0.1, 3),
+      new THREE.MeshStandardMaterial({
+        color: "#7fc8d8",
+        roughness: 0.25,
+        transparent: true,
+        opacity: 0.55,
+      }),
+    );
+    water.position.set(-1.5, 0.62, -23);
+    this.scene.add(water);
+    // Sprinkler patches: wet grass that barely bites, with their little heads.
+    for (const p of SLIP.patches) {
+      const wet = new THREE.Mesh(
+        new THREE.CircleGeometry(p.r, 24),
+        new THREE.MeshStandardMaterial({
+          color: "#5f7a58",
+          roughness: 0.35,
+          transparent: true,
+          opacity: 0.5,
+        }),
+      );
+      wet.rotation.x = -Math.PI / 2;
+      wet.position.set(p.x, 0.012, p.z);
+      this.scene.add(wet);
+      const head = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.07, 0.14, 8),
+        new THREE.MeshStandardMaterial({
+          color: "#9aa3ab",
+          roughness: 0.4,
+          metalness: 0.6,
+        }),
+      );
+      head.position.set(p.x + p.r * 0.75, 0.08, p.z - p.r * 0.5);
+      this.scene.add(head);
+    }
+  }
+  /** The lawn mower: a red push mower that mows the yard on its own loop. */
+  makeMower() {
+    const root = this.mowerRoot;
+    root.position.set(MOWER.path[0].x, 0, MOWER.path[0].z);
+    const paint = (color: string, metal = 0.15) =>
+      new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: metal });
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.42, 1.35), paint("#c8452e"));
+    deck.position.y = 0.42;
+    deck.castShadow = true;
+    root.add(deck);
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.3, 0.55), paint("#a33626"));
+    hood.position.set(0, 0.72, 0.38);
+    hood.castShadow = true;
+    root.add(hood);
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.5), paint("#2e3236"));
+    seat.position.set(0, 0.7, -0.35);
+    root.add(seat);
+    for (const sx of [-0.3, 0.3]) {
+      const strut = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.72, 0.04), paint("#3a3f45", 0.6));
+      strut.position.set(sx, 0.85, -0.72);
+      root.add(strut);
+    }
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.05, 0.05), paint("#3a3f45", 0.6));
+    bar.position.set(0, 1.2, -0.78);
+    root.add(bar);
+    const blade = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.5, 0.5, 0.035, 20),
+      paint("#8a9096", 0.7),
+    );
+    blade.position.y = 0.14;
+    root.add(blade);
+    this.mowerBlade = blade;
+    for (const sx of [-0.5, 0.5]) {
+      const wheel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.16, 0.08, 12),
+        paint("#2e3236"),
+      );
+      wheel.rotation.x = Math.PI / 2;
+      wheel.position.set(sx, 0.16, 0);
+      root.add(wheel);
+    }
+    this.scene.add(root);
+  }
+  /** A fresh position from the authority; render() walks toward it. */
+  updateMower(x: number, z: number) {
+    this.mowerTarget = { x, z };
+  }
+  /** Pale sky dressing beyond the yard walls: low-poly hills and a few soft clouds. */
+  outdoorHorizon() {
+    const hillGeometry = new THREE.SphereGeometry(1, 18, 10);
+    const hillColors = ["#789873", "#86a47c", "#6f906d", "#93ad83"];
+    const hills = [
+      [-31, -3.5, -54, 24, 11, 11],
+      [-10, -4.5, -58, 20, 10, 9],
+      [10, -3.8, -56, 25, 12, 11],
+      [34, -4.2, -52, 24, 10, 10],
+    ] as const;
+    hills.forEach(([x, y, z, sx, sy, sz], i) => {
+      const hill = new THREE.Mesh(
+        hillGeometry,
+        new THREE.MeshLambertMaterial({ color: hillColors[i] }),
+      );
+      hill.position.set(x, y, z);
+      hill.scale.set(sx, sy, sz);
+      hill.receiveShadow = true;
+      this.horizon.add(hill);
+    });
+
+    const puffGeometry = new THREE.SphereGeometry(1, 12, 8);
+    const cloudMaterial = new THREE.MeshBasicMaterial({ color: "#edf5f3" });
+    const clouds = [
+      [-19, 13, -43, 1.2],
+      [3, 16, -58, 1.45],
+      [26, 12, -47, 1.1],
+    ] as const;
+    for (const [x, y, z, scale] of clouds) {
+      const cloud = new THREE.Group();
+      for (const [dx, dy, dz, size] of [
+        [-1.5, 0, 0, 1.35],
+        [-0.45, 0.35, 0, 1.7],
+        [0.8, 0.1, 0, 1.45],
+        [1.7, -0.05, 0, 1.05],
+      ] as const) {
+        const puff = new THREE.Mesh(puffGeometry, cloudMaterial);
+        puff.position.set(dx, dy, dz);
+        puff.scale.set(size * 1.35, size * 0.65, size);
+        cloud.add(puff);
+      }
+      cloud.position.set(x, y, z);
+      cloud.scale.setScalar(scale);
+      this.horizon.add(cloud);
+    }
+    this.horizon.visible = false;
+    this.scene.add(this.horizon);
+  }
+  /** Children[0] is always the tintable body: `setHighlight` writes its emissive. */
+  makeProp(i: number) {
+    const root = new THREE.Group(),
+      kind = PROPS[i].kind;
+    if (kind === "ball") {
+      const ball = new THREE.Mesh(
+        new THREE.SphereGeometry(0.3, 24, 16),
+        new THREE.MeshStandardMaterial({
+          color: PALETTE[i % 8],
+          roughness: 0.45,
+        }),
+      );
+      ball.castShadow = true;
+      ball.receiveShadow = true;
+      root.add(ball);
+      for (const axis of [0, 1]) {
+        const seam = new THREE.Mesh(
+          new THREE.TorusGeometry(0.301, 0.022, 8, 32),
+          new THREE.MeshStandardMaterial({ color: "#f4ecd8", roughness: 0.6 }),
+        );
+        if (axis === 0) seam.rotation.x = Math.PI / 2;
+        else seam.rotation.y = Math.PI / 2;
+        root.add(seam);
+      }
+      return root;
+    }
+    if (kind === "gun") {
+      // Modelled pointing down -z, which is where its holder is looking.
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(0.11, 0.16, 0.56),
+        new THREE.MeshStandardMaterial({
+          color: "#414b54",
+          roughness: 0.45,
+          metalness: 0.45,
+        }),
+      );
+      body.castShadow = true;
+      root.add(body);
+      const barrel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.045, 0.05, 0.42, 10),
+        new THREE.MeshStandardMaterial({
+          color: "#2b3238",
+          roughness: 0.35,
+          metalness: 0.6,
+        }),
+      );
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set(0, 0.02, -0.42);
+      barrel.castShadow = true;
+      const grip = new THREE.Mesh(
+        new THREE.BoxGeometry(0.1, 0.28, 0.13),
+        new THREE.MeshStandardMaterial({ color: "#6b5137", roughness: 0.8 }),
+      );
+      grip.position.set(0, -0.2, 0.14);
+      grip.rotation.x = -0.22;
+      grip.castShadow = true;
+      const sight = new THREE.Mesh(
+        new THREE.BoxGeometry(0.05, 0.05, 0.2),
+        new THREE.MeshStandardMaterial({
+          color: PALETTE[i % 8],
+          roughness: 0.6,
+        }),
+      );
+      sight.position.set(0, 0.11, -0.02);
+      root.add(barrel, grip, sight);
+      return root;
+    }
+    if (kind === "bat") {
+      // The handle is at +z and the barrel reaches forward along -z.
+      const barrel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.1, 0.055, 0.9, 14),
+        new THREE.MeshStandardMaterial({
+          color: PALETTE[i % 8],
+          roughness: 0.72,
+        }),
+      );
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.z = -0.18;
+      barrel.castShadow = true;
+      root.add(barrel);
+      const grip = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.043, 0.043, 0.34, 12),
+        new THREE.MeshStandardMaterial({ color: "#3b2b22", roughness: 0.9 }),
+      );
+      grip.rotation.x = Math.PI / 2;
+      grip.position.z = 0.43;
+      root.add(grip);
+      return root;
+    }
+    if (kind === "horn") {
+      // A toy brass squeeze horn. In the held pose -z points away from the
+      // player, so the wide bell opens along -z and the bulb sits at the rear.
+      const bell = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.2, 0.065, 0.5, 18, 1, true),
+        new THREE.MeshStandardMaterial({
+          color: "#d8a928",
+          roughness: 0.3,
+          metalness: 0.65,
+          side: THREE.DoubleSide,
+        }),
+      );
+      bell.rotation.x = -Math.PI / 2;
+      bell.position.z = 0;
+      bell.castShadow = true;
+      root.add(bell);
+      const bulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.15, 16, 12),
+        new THREE.MeshStandardMaterial({ color: "#d84b43", roughness: 0.85 }),
+      );
+      bulb.scale.z = 1.25;
+      bulb.position.z = 0.38;
+      root.add(bulb);
+      return root;
+    }
+    if (kind === "chair") {
+      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.8 });
+      const wood = new THREE.MeshStandardMaterial({ color: "#6c5c46", roughness: 0.8 });
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.1, 0.5), tint);
+      seat.position.y = -0.3;
+      seat.castShadow = true;
+      seat.receiveShadow = true;
+      root.add(seat);
+      const back = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.62, 0.09), wood);
+      back.position.set(0, 0.13, -0.21);
+      back.castShadow = true;
+      root.add(back);
+      for (const [lx, lz] of [[-0.22, -0.19], [0.22, -0.19], [-0.22, 0.19], [0.22, 0.19]] as const) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.28, 0.07), wood);
+        leg.position.set(lx, -0.31, lz);
+        root.add(leg);
+      }
+      return root;
+    }
+    if (kind === "table") {
+      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.8 });
+      const wood = new THREE.MeshStandardMaterial({ color: "#6c5c46", roughness: 0.8 });
+      const top = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.08, 0.84), tint);
+      top.position.y = 0.34;
+      top.castShadow = true;
+      top.receiveShadow = true;
+      root.add(top);
+      for (const [lx, lz] of [[-0.34, -0.34], [0.34, -0.34], [-0.34, 0.34], [0.34, 0.34]] as const) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.62, 0.09), wood);
+        leg.position.set(lx, -0.07, lz);
+        leg.castShadow = true;
+        root.add(leg);
+      }
+      return root;
+    }
+    if (kind === "trashcan") {
+      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.55, side: THREE.DoubleSide });
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.17, 0.5, 12, 1, true), tint);
+      body.position.y = -0.05;
+      body.castShadow = true;
+      root.add(body);
+      const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.215, 0.215, 0.07, 12, 1, true), new THREE.MeshStandardMaterial({ color: "#4a4f48", roughness: 0.6, side: THREE.DoubleSide }));
+      rim.position.y = 0.185;
+      root.add(rim);
+      return root;
+    }
+    if (kind === "bottle") {
+      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.3 });
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.34, 10), tint);
+      body.position.y = -0.07;
+      body.castShadow = true;
+      root.add(body);
+      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.055, 0.16, 10), new THREE.MeshStandardMaterial({ color: "#e8f2ee", roughness: 0.3 }));
+      neck.position.y = 0.14;
+      root.add(neck);
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.03, 10), new THREE.MeshStandardMaterial({ color: "#d8d5c8", roughness: 0.6 }));
+      cap.position.y = 0.225;
+      root.add(cap);
+      return root;
+    }
+    if (kind === "bucket") {
+      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.4, metalness: 0.3, side: THREE.DoubleSide });
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.155, 0.3, 12, 1, true), tint);
+      body.position.y = -0.02;
+      body.castShadow = true;
+      root.add(body);
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.175, 0.018, 8, 24), new THREE.MeshStandardMaterial({ color: "#8a8f96", roughness: 0.35, metalness: 0.5 }));
+      rim.rotation.x = Math.PI / 2;
+      rim.position.y = 0.14;
+      root.add(rim);
+      return root;
+    }
+    const mat = new THREE.MeshStandardMaterial({
+      color: PALETTE[i % 8],
+      roughness: 0.8,
+    });
+    const box = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), mat);
+    box.castShadow = true;
+    box.receiveShadow = true;
+    root.add(box);
+    for (const axis of [0, 2]) {
+      const strap = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          axis === 0 ? 0.12 : 0.61,
+          0.615,
+          axis === 2 ? 0.12 : 0.61,
+        ),
+        new THREE.MeshStandardMaterial({ color: "#ece0bc", roughness: 0.9 }),
+      );
+      root.add(strap);
+    }
+    return root;
+  }
+  /** Keep the visible panes in step with what the simulation says is broken. */
+  updateWindows(states: WindowState[]) {
+    for (const s of states) {
+      const w = this.windows.get(s.id);
+      if (w) w.glass.visible = !s.broken;
+    }
+  }
+  /** Shatter VFX: the pane vanishes and a handful of shards spray out. */
+  breakWindow(id: number) {
+    const w = this.windows.get(id),
+      def = WINDOWS.find((d) => d.id === id);
+    if (!w || !def || !w.glass.visible) return;
+    w.glass.visible = false;
+    // The wall normal is the pane's thin axis: z for north/south walls, x otherwise.
+    const alongZ = def.s[2] < def.s[0];
+    for (let i = 0; i < 12; i++) {
+      const shard = new THREE.Mesh(
+        new THREE.BoxGeometry(0.08, 0.16, 0.02),
+        new THREE.MeshStandardMaterial({ color: "#bfe3e8", transparent: true, opacity: 0.9 }),
+      );
+      shard.position.set(
+        def.p[0] + (Math.random() - 0.5) * def.s[0],
+        def.p[1] + (Math.random() - 0.5) * def.s[1],
+        def.p[2] + (Math.random() - 0.5) * def.s[2],
+      );
+      const sign = Math.random() < 0.5 ? -1 : 1;
+      this.shards.push({
+        mesh: shard,
+        vel: new THREE.Vector3(
+          alongZ ? (Math.random() - 0.5) * 2 : sign * (2 + Math.random() * 3),
+          (Math.random() - 0.3) * 2,
+          alongZ ? sign * (2 + Math.random() * 3) : (Math.random() - 0.5) * 2,
+        ),
+        spin: new THREE.Vector3(
+          (Math.random() - 0.5) * 14,
+          (Math.random() - 0.5) * 14,
+          (Math.random() - 0.5) * 14,
+        ),
+        life: 0,
+        ttl: 0.9,
+      });
+      this.scene.add(shard);
+    }
+  }
+  /** The explosive grill's blast: a fireball and sparks over the grate. */
+  grillBoom() {
+    const p = new THREE.Vector3(GRILL.x, 1.0, GRILL.z);
+    const ball = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.55, 1),
+      new THREE.MeshBasicMaterial({
+        color: "#ff9a3c",
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    ball.position.copy(p);
+    this.scene.add(ball);
+    this.effects.push({ mesh: ball, life: 0, ttl: 0.45, shrink: false, grow: 1.6 });
+    this.spark("#ffd27a", 0.35, p, 0.35);
+    this.spark(
+      "#ff9a3c",
+      0.22,
+      new THREE.Vector3(GRILL.x + 0.4, 1.3, GRILL.z),
+      0.3,
+    );
+  }
+  /** Chaos explosions told by the authority: a fireball and sparks at a point. */
+  boomAt(x: number, y: number, z: number) {
+    const p = new THREE.Vector3(x, y + 0.5, z);
+    const ball = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.55, 1),
+      new THREE.MeshBasicMaterial({
+        color: "#ff9a3c",
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    ball.position.copy(p);
+    this.scene.add(ball);
+    this.effects.push({ mesh: ball, life: 0, ttl: 0.45, shrink: false, grow: 1.6 });
+    this.spark("#ffd27a", 0.35, p, 0.35);
+    this.spark("#ff9a3c", 0.22, new THREE.Vector3(x + 0.4, y + 0.8, z), 0.3);
+  }
+  /**
+   * Chaos env modifier for the visuals: giant heads scale every driven head
+   * bone; "none" puts them back. Physics lives in Simulation.setEnv.
+   */
+  setEnv(env: string) {
+    this.env = env;
+    const s = env === "giant-heads" ? 2.6 : 1;
+    for (const a of this.avatars.values()) if (a.head) a.head.bone.scale.setScalar(s);
+  }
+  /** King of the Yard: the crown follows the id the authority named. */
+  setKing(id: number) {
+    this.kingId = id;
+  }
+  /** Slide the visible leaves to match the physics doors the simulation owns. */
+  updateDoors(states: DoorState[]) {
+    for (const s of states) {
+      const leaf = this.doors.get(s.id),
+        def = DOORS.find((d) => d.id === s.id);
+      if (!leaf || !def) continue;
+      const e = s.progress * s.progress * (3 - 2 * s.progress);
+      leaf.position.set(
+        def.p[0] + def.slide[0] * e,
+        def.p[1] + def.slide[1] * e,
+        def.p[2] + def.slide[2] * e,
+      );
+    }
+  }
+  private spark(
+    color: string,
+    size: number,
+    position: THREE.Vector3,
+    ttl: number,
+  ) {
+    const mesh = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(size, 0),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    mesh.position.copy(position);
+    this.scene.add(mesh);
+    this.effects.push({ mesh, life: 0, ttl, shrink: true });
+  }
+  /** One shot: muzzle flash, a fading tracer, and a spark where it landed. */
+  tracer(shot: {
+    x: number;
+    y: number;
+    z: number;
+    dx: number;
+    dy: number;
+    dz: number;
+    distance: number;
+    hit: number;
+  }, liveMuzzle?: Vec3) {
+    const authorityOrigin = new THREE.Vector3(shot.x, shot.y, shot.z),
+      authorityDirection = new THREE.Vector3(shot.dx, shot.dy, shot.dz).normalize(),
+      end = authorityOrigin.clone().addScaledVector(authorityDirection, shot.distance),
+      origin = liveMuzzle
+        ? new THREE.Vector3(liveMuzzle.x, liveMuzzle.y, liveMuzzle.z)
+        : authorityOrigin,
+      direction = end.clone().sub(origin).normalize(),
+      length = Math.max(0.5, end.distanceTo(origin));
+    const geometry = new THREE.CylinderGeometry(0.013, 0.005, length, 6, 1, true);
+    geometry.translate(0, -length / 2, 0);
+    const beam = new THREE.Mesh(
+      geometry,
+      new THREE.MeshBasicMaterial({
+        color: "#ffe6a6",
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    beam.position.copy(origin);
+    beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), direction);
+    this.scene.add(beam);
+    this.effects.push({ mesh: beam, life: 0, ttl: 0.18, shrink: false });
+    this.spark("#fff2c4", 0.085, origin, 0.06);
+    this.spark(
+      shot.hit ? "#ffc4a8" : "#e9e3cf",
+      shot.hit ? 0.28 : 0.13,
+      end,
+      shot.hit ? 0.24 : 0.16,
+    );
+  }
+  /** Muzzle ghost flash covering own-shot latency; the real pellet arrives via snapshots. */
+  pelletGhost(muzzle: { x: number; y: number; z: number }) {
+    this.spark(
+      "#ffd27a",
+      0.14,
+      new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z),
+      0.16,
+    );
+  }
+  /** Impact spark where a live pellet was consumed. */
+  pelletImpact(pos: { x: number; y: number; z: number }) {
+    this.spark(
+      "#ffcf8a",
+      0.12,
+      new THREE.Vector3(pos.x, pos.y, pos.z),
+      0.1,
+    );
+  }
+  /** Authority-told collision burst; the bigger the impact, the bigger it looks (design doc §17). */
+  impactAt(x: number, y: number, z: number, strength: number) {
+    const p = new THREE.Vector3(x, y, z),
+      s = Math.max(0, Math.min(1, strength));
+    this.spark(s > 0.6 ? "#fff2c4" : "#e9e3cf", 0.06 + s * 0.22, p, 0.1 + s * 0.18);
+    if (s > 0.35)
+      this.spark(
+        "#ffc4a8",
+        0.05 + s * 0.12,
+        new THREE.Vector3(x, y + 0.12, z),
+        0.12 + s * 0.14,
+      );
+    if (s > 0.7) {
+      const ring = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(0.5, 1),
+        new THREE.MeshBasicMaterial({
+          color: "#ffe6a6",
+          transparent: true,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      ring.position.copy(p);
+      this.scene.add(ring);
+      this.effects.push({ mesh: ring, life: 0, ttl: 0.3, shrink: false, grow: 1.2 + s });
+    }
+  }
+  /** Comedic elimination poof: a puff of soft smoke where the round ended for someone. */
+  poofAt(x: number, y: number, z: number) {
+    const p = new THREE.Vector3(x, Math.max(y, 0.6), z);
+    for (let i = 0; i < 5; i++) {
+      const puff = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(0.28 + Math.random() * 0.2, 1),
+        new THREE.MeshBasicMaterial({
+          color: "#f4ecd8",
+          transparent: true,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      puff.position.copy(p).add(
+        new THREE.Vector3(
+          (Math.random() - 0.5) * 0.7,
+          Math.random() * 0.5,
+          (Math.random() - 0.5) * 0.7,
+        ),
+      );
+      this.scene.add(puff);
+      this.effects.push({ mesh: puff, life: 0, ttl: 0.55 + i * 0.06, shrink: false, grow: 1.8 });
+    }
+  }
+  /** Exact rendered barrel tip, after interpolation, for a tracer with no side gap. */
+  muzzle(id: number): Vec3 | undefined {
+    const gun = this.props.get(id);
+    if (!gun || PROPS[id - 1]?.kind !== "gun") return;
+    gun.updateMatrixWorld(true);
+    const p = gun.localToWorld(new THREE.Vector3(0, 0.02, -0.64));
+    return { x: p.x, y: p.y, z: p.z };
+  }
+  useProp(id: number, kind: PropKind) {
+    this.propUses.set(id, { kind, started: this.clock });
+  }
+  avatar(id: number, name: string, color = id - 1) {
+    const existing = this.avatars.get(id);
+    if (existing) {
+      if (existing.nameEl) existing.nameEl.textContent = name;
+      return existing;
+    }
+    const root = new THREE.Group();
+    const character = this.asset ? clone(this.asset.scene) : new THREE.Group();
+    character.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        const clonedMaterials = mats.map((m) => {
+          const copy = m.clone() as THREE.MeshStandardMaterial;
+          const baseColor = new THREE.Color(CHARACTER_PALETTE[color % 8]);
+          if (m.name.startsWith("Jacket") || m.name.startsWith("Body")) {
+            copy.color.copy(baseColor);
+            copy.roughness = 0.55;
+          } else if (m.name.startsWith("Nose")) {
+            const hsl = { h: 0, s: 0, l: 0 };
+            baseColor.getHSL(hsl);
+            copy.color.setHSL(
+              hsl.h,
+              1.0,
+              Math.min(0.85, hsl.l * 1.25 + 0.1),
+            );
+            copy.roughness = 0.5;
+          } else if (m.name.startsWith("Mouth")) {
+            const hsl = { h: 0, s: 0, l: 0 };
+            baseColor.getHSL(hsl);
+            copy.color.setHSL(
+              (hsl.h + 0.5) % 1.0,
+              1.0,
+              0.48,
+            );
+            copy.roughness = 0.5;
+          }
+          return copy;
+        });
+        o.material = Array.isArray(o.material)
+          ? clonedMaterials
+          : clonedMaterials[0];
+      }
+    });
+    root.add(character);
+    this.scene.add(root);
+    const mixer = new THREE.AnimationMixer(character),
+      actions = new Map<string, THREE.AnimationAction>();
+    for (const clip of this.asset?.animations ?? [])
+      actions.set(clip.name.split("|").at(-1)!, mixer.clipAction(clip));
+    const idle = [...actions.entries()].find(([n]) => n.includes("Idle"));
+    idle?.[1].play();
+    const label = document.createElement("div");
+    label.className = "player-label";
+    const nameEl = document.createElement("span");
+    nameEl.className = "label-name";
+    nameEl.textContent = name;
+    const hpBar = document.createElement("div");
+    hpBar.className = "hp-bar";
+    const hpFill = document.createElement("div");
+    hpFill.className = "hp-fill";
+    hpBar.append(hpFill);
+    const outTag = document.createElement("span");
+    outTag.className = "out-tag";
+    outTag.textContent = "OUT";
+    outTag.hidden = true;
+    const poolTag = document.createElement("span");
+    poolTag.className = "pool-tag";
+    poolTag.textContent = "POOL";
+    poolTag.hidden = true;
+    const kingTag = document.createElement("span");
+    kingTag.className = "king-tag";
+    kingTag.textContent = "👑";
+    kingTag.hidden = true;
+    label.append(nameEl, hpBar, outTag, poolTag, kingTag);
+    this.labels.append(label);
+    const avatar: Avatar = {
+      id,
+      root,
+      mixer,
+      actions,
+      current: idle?.[0] ?? "",
+      color,
+      hatGroup: null,
+      emote: null,
+      label,
+      nameEl,
+      hp: hpFill,
+      out: outTag,
+      pool: poolTag,
+      king: kingTag,
+      driven: [],
+      armL: driven(character, "armL"),
+      armR: driven(character, "armR"),
+      head: driven(character, "head"),
+      jaw: driven(character, "jaw"),
+      loudness: -1,
+      speaking: false,
+      mouth: 0,
+    };
+    avatar.driven = [avatar.armL, avatar.armR, avatar.head, avatar.jaw].filter(
+      (d) => d !== undefined,
+    );
+    if (this.env === "giant-heads" && avatar.head)
+      avatar.head.bone.scale.setScalar(2.6);
+    this.avatars.set(id, avatar);
+    this.applyCosmetics(avatar);
+    return avatar;
+  }
+  /**
+   * Equip a player's cosmetics (design doc §18 — strictly cosmetic). Stored
+   * per id so avatars that have not been created yet pick them up on spawn.
+   */
+  setCosmetics(id: number, c: Cosmetics) {
+    this.cosmeticCache.set(id, c);
+    const a = this.avatars.get(id);
+    if (a) this.applyCosmetics(a);
+  }
+  /** Start an emote on a player; updatePlayer() performs and expires it. */
+  emote(id: number, emoteId: string) {
+    if (!EMOTES.some((e) => e.id === emoteId)) return;
+    const a = this.avatars.get(id);
+    if (a) a.emote = { id: emoteId, start: performance.now() };
+  }
+  /** Recolour the avatar's jacket/body/nose and swap its hat. */
+  private applyCosmetics(a: Avatar) {
+    const cos = this.cosmeticCache.get(a.id) ?? DEFAULT_COSMETICS;
+    this.applySkin(a, cos.skin);
+    this.applyHat(a, cos.hat);
+  }
+  /** Recolour the avatar's cloned materials for a skin. */
+  private applySkin(a: Avatar, skinId: string) {
+    const skin = SKINS.find((s) => s.id === skinId) ?? SKINS[0];
+    const base = new THREE.Color(skin.jacket ?? CHARACTER_PALETTE[a.color % 8]);
+    const body = new THREE.Color(
+      skin.body ?? skin.jacket ?? CHARACTER_PALETTE[a.color % 8],
+    );
+    const nose = skin.nose ? new THREE.Color(skin.nose) : null;
+    a.root.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        const mat = m as THREE.MeshStandardMaterial;
+        const n = mat.name;
+        if (n.startsWith("Jacket")) mat.color.copy(base);
+        else if (n.startsWith("Body")) mat.color.copy(body);
+        else if (n.startsWith("Nose")) {
+          if (nose) mat.color.copy(nose);
+          else {
+            const hsl = { h: 0, s: 0, l: 0 };
+            base.getHSL(hsl);
+            mat.color.setHSL(
+              hsl.h,
+              1.0,
+              Math.min(0.85, hsl.l * 1.25 + 0.1),
+            );
+          }
+        } else if (n.startsWith("Mouth")) {
+          const hsl = { h: 0, s: 0, l: 0 };
+          base.getHSL(hsl);
+          mat.color.setHSL((hsl.h + 0.5) % 1.0, 1.0, 0.48);
+        }
+      }
+    });
+  }
+  /** Swap the hat; every wearer's clone shares the proto's geometry. */
+  private applyHat(a: Avatar, hatId: string | null) {
+    if (a.hatGroup) {
+      a.root.remove(a.hatGroup);
+      a.hatGroup = null;
+    }
+    if (!hatId) return;
+    this.hatProtos ??= new Map();
+    let proto = this.hatProtos.get(hatId);
+    if (!proto) {
+      proto = this.makeHat(hatId);
+      this.hatProtos.set(hatId, proto);
+    }
+    const g = proto.clone();
+    a.root.add(g);
+    a.hatGroup = g;
+  }
+  /** Procedural hat geometry — no GLB regeneration needed. */
+  private makeHat(id: string): THREE.Group {
+    const g = new THREE.Group();
+    const part = (
+      geo: THREE.BufferGeometry,
+      color: string,
+      y: number,
+      z = 0,
+      extra?: Partial<THREE.MeshStandardMaterialParameters>,
+    ) => {
+      const m = new THREE.Mesh(
+        geo,
+        new THREE.MeshStandardMaterial({ color, roughness: 0.6, ...extra }),
+      );
+      m.position.set(0, y, z);
+      m.castShadow = true;
+      g.add(m);
+      return m;
+    };
+    if (id === "cap") {
+      const dome = part(
+        new THREE.SphereGeometry(0.24, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+        "#35528c",
+        1.84,
+      );
+      dome.scale.set(1, 0.75, 1);
+      part(new THREE.BoxGeometry(0.36, 0.03, 0.24), "#35528c", 1.85, 0.26);
+    } else if (id === "party") {
+      part(new THREE.ConeGeometry(0.2, 0.5, 16), "#ff5da2", 2.03);
+      part(new THREE.SphereGeometry(0.07, 10, 8), "#ffd800", 2.3);
+    } else if (id === "tophat") {
+      part(new THREE.CylinderGeometry(0.34, 0.34, 0.03, 20), "#1c1c22", 1.9);
+      part(new THREE.CylinderGeometry(0.2, 0.22, 0.4, 20), "#1c1c22", 2.11);
+    } else if (id === "halo") {
+      const h = part(new THREE.TorusGeometry(0.2, 0.035, 8, 24), "#ffd800", 2.06, 0, {
+        emissive: "#b8860b",
+        emissiveIntensity: 0.7,
+      });
+      h.rotation.x = Math.PI / 2;
+    }
+    return g;
+  }
+  /** Hinge angles for an emote at progress t ∈ [0,1); null when unknown. */
+  private emotePose(
+    id: string,
+    t: number,
+  ): { l?: number; r?: number; head?: number } | null {
+    const s = Math.sin;
+    if (id === "wave") return { r: -2.15 + s(t * Math.PI * 6) * 0.45 };
+    if (id === "flex")
+      return {
+        l: -2.7 + s(t * Math.PI * 2) * 0.12,
+        r: -2.7 + s(t * Math.PI * 2) * 0.12,
+        head: -0.3,
+      };
+    if (id === "taunt")
+      return { r: -1.35, head: s(t * Math.PI * 4) * 0.3 };
+    if (id === "dance") {
+      const beat = t * Math.PI * 5;
+      return {
+        l: -1.5 + s(beat) * 0.7,
+        r: -1.5 - s(beat) * 0.7,
+        head: s(beat * 2) * 0.2,
+      };
+    }
+    return null;
+  }
+  setPlaying(playing: boolean) {
+    this.playing = playing;
+    for (const m of this.front) m.visible = playing;
+    for (const p of this.preview) p.visible = !playing;
+    this.horizon.visible = playing;
+    const sky = playing ? GAME_SKY : LOBBY_SKY;
+    this.renderer.setClearColor(sky);
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.color.copy(sky);
+      this.scene.fog.near = playing ? 38 : 25;
+      this.scene.fog.far = playing ? 88 : 65;
+    }
+  }
+  private play(a: Avatar, desired: string, speed = 1) {
+    const action = [...a.actions.entries()].find(([name]) =>
+      name.includes(desired),
+    );
+    if (action && action[0] !== a.current) {
+      a.actions.get(a.current)?.fadeOut(0.15);
+      action[1].reset().fadeIn(0.15).play();
+      a.current = action[0];
+    }
+    if (action) action[1].timeScale = speed;
+  }
+  /** Keep the lobby trio turned toward one another while their idle chatter plays. */
+  private animatePreview(dt: number) {
+    const center = FOCUS.clone().setY(0);
+    for (const performer of this.previewCast) {
+      const { avatar: a, home, phase } = performer;
+      a.root.position.copy(home);
+      const towardFriends = center.clone().sub(a.root.position);
+      a.root.rotation.y = Math.atan2(towardFriends.x, towardFriends.z);
+      this.play(a, "Idle");
+      repose(a, dt);
+      hinge(a.head, Math.sin(this.clock * 0.9 + phase) * 0.08);
+    }
+  }
+  /** A visitor took hold of the lobby camera. */
+  grab() {
+    this.dragging = true;
+    this.coasting.yaw = this.coasting.pitch = 0;
+  }
+  /** …and let go of it, leaving it coasting on the last of the drag. */
+  letGo() {
+    this.dragging = false;
+  }
+  /**
+   * Swing the lobby camera by a drag of `dx`/`dy` viewport pixels over `dt` seconds. The
+   * rate is kept, so the camera carries on turning after the visitor lets go.
+   */
+  orbitBy(dx: number, dy: number, dt: number) {
+    const { clamp } = THREE.MathUtils;
+    const was = { yaw: this.swung.yaw, pitch: this.swung.pitch };
+    this.swung.yaw = clamp(this.swung.yaw - dx * 0.004, -SWING.yaw, SWING.yaw);
+    this.swung.pitch = clamp(
+      this.swung.pitch + dy * 0.003,
+      SWING.pitch[0] - OVERVIEW.pitch,
+      SWING.pitch[1] - OVERVIEW.pitch,
+    );
+    if (dt <= 0) return;
+    this.coasting.yaw = clamp((this.swung.yaw - was.yaw) / dt, -2.5, 2.5);
+    this.coasting.pitch = clamp((this.swung.pitch - was.pitch) / dt, -2.5, 2.5);
+  }
+  /** Push the lobby camera in or out; `delta` is raw wheel movement. */
+  zoomBy(delta: number) {
+    this.swung.dist = THREE.MathUtils.clamp(
+      this.swung.dist + delta * 0.02,
+      SWING.dist[0] - OVERVIEW.dist,
+      SWING.dist[1] - OVERVIEW.dist,
+    );
+  }
+  /** Where the pointer sits, -1..1 across the viewport, for the idle parallax. */
+  aim(x: number, y: number) {
+    this.parallax.wantX = x;
+    this.parallax.wantY = y;
+  }
+  /**
+   * The landing-page camera: a slow orbit of the building that a visitor can drag, plus a
+   * one-off arrival flight the first time the world is shown.
+   */
+  overview(dt: number) {
+    if (this.playing) return;
+    const { clamp, lerp } = THREE.MathUtils;
+    this.drift += dt;
+    this.arrival = this.calm ? 1 : Math.min(1, this.arrival + dt / ARRIVAL);
+    const landed = 1 - Math.pow(1 - this.arrival, 3);
+    if (!this.dragging) {
+      // Carry the release through and bleed it off, then the rig coasts on the drift alone.
+      this.swung.yaw = clamp(
+        this.swung.yaw + this.coasting.yaw * dt,
+        -SWING.yaw,
+        SWING.yaw,
+      );
+      this.swung.pitch = clamp(
+        this.swung.pitch + this.coasting.pitch * dt,
+        SWING.pitch[0] - OVERVIEW.pitch,
+        SWING.pitch[1] - OVERVIEW.pitch,
+      );
+      const decay = Math.exp(-dt * 3.2);
+      this.coasting.yaw *= decay;
+      this.coasting.pitch *= decay;
+    }
+    // The parallax is a whisper — enough that the room answers a moving mouse.
+    const follow = this.dragging || this.calm ? 0 : 1;
+    const ease = Math.min(1, dt * 2.4);
+    this.parallax.x = lerp(this.parallax.x, this.parallax.wantX * follow, ease);
+    this.parallax.y = lerp(this.parallax.y, this.parallax.wantY * follow, ease);
+    const alive = this.calm ? 0 : 1;
+    const yaw =
+      OVERVIEW.yaw +
+      this.swung.yaw +
+      Math.sin(this.drift * 0.11) * 0.075 * alive +
+      this.parallax.x * 0.035 -
+      (1 - landed) * 0.22;
+    const pitch = clamp(
+      OVERVIEW.pitch +
+        this.swung.pitch +
+        Math.sin(this.drift * 0.07 + 1.3) * 0.018 * alive +
+        this.parallax.y * 0.02 +
+        (1 - landed) * 0.12,
+      SWING.pitch[0],
+      SWING.pitch[1],
+    );
+    const dist = (OVERVIEW.dist + this.swung.dist) * (1 + (1 - landed) * 0.14);
+    const flat = Math.cos(pitch) * dist;
+    this.camera.position.set(
+      FOCUS.x + Math.sin(yaw) * flat,
+      FOCUS.y + Math.sin(pitch) * dist,
+      FOCUS.z + Math.cos(yaw) * flat,
+    );
+    this.camera.lookAt(FOCUS);
+    for (const m of this.front) m.visible = false;
+  }
+  updatePlayer(
+    s: PlayerState,
+    name: string,
+    dt: number,
+    color = s.id - 1,
+    showLabel = true,
+  ) {
+    const a = this.avatar(s.id, name, color);
+    a.label.hidden = !showLabel;
+    if (a.hp) a.hp.style.width = `${Math.max(0, Math.min(100, s.hp ?? 100))}%`;
+    if (a.out) a.out.hidden = !s.out;
+    if (a.pool) a.pool.hidden = s.pool === 0;
+    if (a.king) a.king.hidden = this.kingId !== s.id;
+    a.root.position.set(s.x, s.y - (s.flags & 2 ? 0.5 : 0.85), s.z);
+    a.root.rotation.y = s.yaw + Math.PI;
+    const speed = Math.hypot(s.vx, s.vz),
+      desired = !(s.flags & 1)
+        ? "Jump"
+        : s.flags & 2
+          ? "Crouch"
+          : speed > 0.15
+            ? s.flags & 4
+              ? "Sprint"
+              : "Walk"
+            : "Idle";
+    const animationSpeed =
+      desired === "Walk"
+        ? Math.max(0.45, Math.min(1.65, speed / 2.25))
+        : desired === "Sprint"
+          ? Math.max(1.35, Math.min(2, speed / 3))
+          : desired === "Crouch"
+            ? speed < 0.15
+              ? 0
+              : Math.max(0.45, Math.min(1.15, speed / 2))
+            : 1;
+    this.play(a, desired, animationSpeed);
+    repose(a, dt);
+    // Aim the runtime-driven bones on top of the pose the mixer just wrote.
+    let pose: { l?: number; r?: number; head?: number } | null = null;
+    if (a.emote) {
+      const dur = EMOTES.find((e) => e.id === a.emote!.id)?.duration ?? 2000;
+      const t = (performance.now() - a.emote.start) / dur;
+      if (t >= 1) a.emote = null;
+      else pose = this.emotePose(a.emote.id, t);
+    }
+    hinge(
+      a.head,
+      Math.max(-1.2, Math.min(1.2, s.pitch)) * HEAD_TILT + (pose?.head ?? 0),
+    );
+    if (pose) {
+      // One hinge per arm per frame: the emote replaces, never compounds on,
+      // the held-prop pose.
+      if (pose.l !== undefined) hinge(a.armL, pose.l);
+      if (pose.r !== undefined) hinge(a.armR, pose.r);
+    } else if (s.held) {
+      hinge(a.armL, HOLD_LIFT);
+      hinge(a.armR, HOLD_LIFT);
+    }
+    return a;
+  }
+  /** Put the camera on a collision-aware boom behind a player. */
+  thirdPersonCamera(
+    target: { x: number; y: number; z: number },
+    yaw: number,
+    pitch: number,
+  ) {
+    const focus = this.cameraFocus.set(target.x, target.y + 0.35, target.z);
+    const boom = this.cameraBoom
+      .set(
+        Math.sin(yaw) * Math.cos(pitch),
+        Math.sin(pitch),
+        Math.cos(yaw) * Math.cos(pitch),
+      )
+      .normalize();
+    this.cameraRay.set(focus, boom);
+    let distance = THIRD_PERSON_DISTANCE;
+    const test = (center: readonly number[], size: readonly number[]) => {
+      this.cameraBox
+        .setFromCenterAndSize(
+          this.cameraHit.set(center[0], center[1], center[2]),
+          this.cameraSize.set(size[0], size[1], size[2]),
+        )
+        .expandByScalar(THIRD_PERSON_PADDING);
+      if (this.cameraBox.containsPoint(focus)) return;
+      const hit = this.cameraRay.intersectBox(this.cameraBox, this.cameraHit);
+      if (hit)
+        distance = Math.min(
+          distance,
+          Math.max(0.4, hit.distanceTo(focus) - 0.08),
+        );
+    };
+    for (const box of LEVEL) test(box.p, box.s);
+    for (const door of DOORS) {
+      const leaf = this.doors.get(door.id);
+      if (leaf) test(leaf.position.toArray(), door.s);
+    }
+    this.camera.position.copy(focus).addScaledVector(boom, distance);
+    this.camera.lookAt(focus.x, focus.y - 0.12, focus.z);
+  }
+  removePlayer(id: number) {
+    const a = this.avatars.get(id);
+    if (!a) return;
+    this.scene.remove(a.root);
+    a.label.remove();
+    a.mixer.stopAllAction();
+    this.avatars.delete(id);
+  }
+  speaking(id: number, on: boolean) {
+    const a = this.avatars.get(id);
+    if (!a) return;
+    a.label.classList.toggle("speaking", on);
+    a.speaking = on;
+  }
+  /** Voice level for one player, or -1 when it cannot be metered; opens their mouth. */
+  setMouth(id: number, loudness: number) {
+    const a = this.avatars.get(id);
+    if (a) a.loudness = loudness;
+  }
+  updateProps(props: PropState[], builds?: Map<number, number>) {
+    const seen = new Set<number>();
+    for (const p of props) {
+      if (p.id >= PELLET_ID_BASE) {
+        let m = this.pellets.get(p.id);
+        if (!m) {
+          m = new THREE.Mesh(this.pelletGeo, this.pelletMat);
+          this.scene.add(m);
+          this.pellets.set(p.id, m);
+        }
+        const big = !!((builds?.get(p.owner) ?? 0) & cardBit("big-ball"));
+        m.scale.setScalar(big ? 0.3 / 0.09 : 1);
+        m.position.set(p.x, p.y, p.z);
+        seen.add(p.id);
+        continue;
+      }
+      const m = this.props.get(p.id);
+      if (!m) continue;
+      m.position.set(p.x, p.y, p.z);
+      m.quaternion.set(p.qx, p.qy, p.qz, p.qw).normalize();
+      this.propBases.set(p.id, {
+        position: m.position.clone(),
+        rotation: m.quaternion.clone(),
+      });
+    }
+    for (const [id, m] of [...this.pellets]) {
+      if (!seen.has(id)) {
+        this.scene.remove(m);
+        this.pellets.delete(id);
+      }
+    }
+  }
+  setHighlight(id: number) {
+    if (id === this.highlight) return;
+    for (const [key, group] of this.props) {
+      const mat = (group.children[0] as THREE.Mesh)
+        .material as THREE.MeshStandardMaterial;
+      mat.emissive.set(key === id ? "#a5c666" : "#000000");
+      mat.emissiveIntensity = key === id ? 0.28 : 0;
+    }
+    this.highlight = id;
+  }
+  resize() {
+    this.renderer.setSize(innerWidth, innerHeight);
+    this.camera.aspect = innerWidth / innerHeight;
+    this.camera.updateProjectionMatrix();
+  }
+  render(dt: number) {
+    this.clock += dt;
+    for (let i = this.effects.length - 1; i >= 0; i--) {
+      const e = this.effects[i];
+      e.life += dt;
+      const left = 1 - e.life / e.ttl;
+      if (left <= 0) {
+        this.scene.remove(e.mesh);
+        e.mesh.geometry.dispose();
+        (e.mesh.material as THREE.Material).dispose();
+        this.effects.splice(i, 1);
+        continue;
+      }
+      (e.mesh.material as THREE.MeshBasicMaterial).opacity = left;
+      if (e.shrink) e.mesh.scale.setScalar(0.4 + left * 0.8);
+      else if (e.grow !== undefined) e.mesh.scale.setScalar(0.3 + (1 - left) * e.grow);
+    }
+    for (let i = this.shards.length - 1; i >= 0; i--) {
+      const sh = this.shards[i];
+      sh.life += dt;
+      if (sh.life >= sh.ttl) {
+        this.scene.remove(sh.mesh);
+        sh.mesh.geometry.dispose();
+        (sh.mesh.material as THREE.Material).dispose();
+        this.shards.splice(i, 1);
+        continue;
+      }
+      sh.vel.y -= 18 * dt;
+      sh.mesh.position.addScaledVector(sh.vel, dt);
+      sh.mesh.rotateX(sh.spin.x * dt);
+      sh.mesh.rotateY(sh.spin.y * dt);
+      sh.mesh.rotateZ(sh.spin.z * dt);
+      (sh.mesh.material as THREE.MeshStandardMaterial).opacity = 1 - sh.life / sh.ttl;
+    }
+    if (!this.playing) this.animatePreview(dt);
+    for (const [id, use] of this.propUses) {
+      const prop = this.props.get(id),
+        base = this.propBases.get(id),
+        age = this.clock - use.started;
+      if (!prop || !base || age > 0.46) {
+        this.propUses.delete(id);
+        continue;
+      }
+      prop.position.copy(base.position);
+      prop.quaternion.copy(base.rotation);
+      if (use.kind === "bat") {
+        const swing = Math.sin(Math.min(1, age / 0.34) * Math.PI) * 1.2;
+        prop.rotateY(-swing);
+        prop.rotateX(swing * 0.28);
+      } else if (use.kind === "horn") {
+        const squeeze = 1 - Math.sin(Math.min(1, age / 0.25) * Math.PI) * 0.08;
+        prop.scale.set(1, 1, squeeze);
+      }
+    }
+    for (const [id, a] of this.avatars) {
+      // Lobby stand-ins natter to themselves; live players follow their own voice level,
+      // falling back to babble for speakers this client cannot meter.
+      const target =
+        id >= 60000
+          ? Math.max(0, Math.sin(this.clock * 0.55 + id * 2.1)) *
+            chatter(this.clock, id)
+          : a.loudness >= 0
+            ? Math.min(1, Math.max(0, (a.loudness - 0.012) * 8))
+            : a.speaking
+              ? chatter(this.clock, id)
+              : 0;
+      a.mouth += (target - a.mouth) * Math.min(1, dt * 24);
+      hinge(a.jaw, -a.mouth * MOUTH_OPEN);
+    }
+    for (const [id, a] of this.avatars) {
+      if (id >= 60000) continue;
+      const p = a.root.position
+        .clone()
+        .add(new THREE.Vector3(0, 1.95, 0))
+        .project(this.camera);
+      const visible =
+        this.playing &&
+        !a.label.hidden &&
+        p.z < 1 &&
+        p.z > -1 &&
+        Math.abs(p.x) < 1 &&
+        Math.abs(p.y) < 1;
+      a.label.style.display = visible ? "block" : "none";
+      a.label.style.transform = `translate(-50%,-100%) translate(${(p.x * 0.5 + 0.5) * innerWidth}px,${(-p.y * 0.5 + 0.5) * innerHeight}px)`;
+    }
+    // The mower walks toward the latest broadcast at its own pace.
+    {
+      const target = this.mowerTarget,
+        p = this.mowerRoot.position;
+      if (target) {
+        const dx = target.x - p.x,
+          dz = target.z - p.z,
+          d = Math.hypot(dx, dz);
+        if (d > 0.001) {
+          const k = Math.min(1, (MOWER.speed * 1.25 * dt) / d);
+          p.x += dx * k;
+          p.z += dz * k;
+          this.mowerRoot.rotation.y = Math.atan2(dx, dz);
+        }
+      }
+      if (this.mowerBlade) this.mowerBlade.rotation.y += dt * 40;
+    }
+    this.renderer.render(this.scene, this.camera);
+  }
+}
