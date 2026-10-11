@@ -319,8 +319,16 @@ export class GameScene {
     for (const def of WINDOWS) {
       const root = new THREE.Group();
       root.position.set(...def.p);
+      // The thin axis is z on north/south walls, x elsewhere. Build the frame
+      // with its depth along local z and rotate for x-thin openings.
+      const thinZ = def.s[2] < def.s[0];
+      const fw = thinZ ? def.s[0] : def.s[2],
+        fh = def.s[1],
+        fd = (thinZ ? def.s[2] : def.s[0]) + 0.03, // proud of the wall face: no z-fighting
+        t = 0.14;
+      if (!thinZ) root.rotation.y = Math.PI / 2;
       const glass = new THREE.Mesh(
-        new THREE.BoxGeometry(def.s[0], def.s[1], 0.06),
+        new THREE.BoxGeometry(fw, fh, 0.06),
         new THREE.MeshStandardMaterial({
           color: "#bfe3e8",
           roughness: 0.1,
@@ -330,10 +338,6 @@ export class GameScene {
         }),
       );
       root.add(glass);
-      const fw = def.s[0],
-        fh = def.s[1],
-        fd = def.s[2],
-        t = 0.14;
       const frameMat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.7 });
       for (const [px, py, sx, sy] of [
         [0, fh / 2 + t / 2, fw + 2 * t, t],
@@ -678,39 +682,50 @@ export class GameScene {
     root.position.set(MOWER.path[0].x, 0, MOWER.path[0].z);
     const paint = (color: string, metal = 0.15) =>
       new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: metal });
-    const deck = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.42, 1.35), paint("#c8452e"));
-    deck.position.y = 0.42;
+    // A push mower: low deck on four wheels, engine hood up front (+z is the
+    // direction of travel), and a handle raked back over two diagonal struts.
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.3, 1.1), paint("#c8452e"));
+    deck.position.y = 0.28;
     deck.castShadow = true;
     root.add(deck);
-    const hood = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.3, 0.55), paint("#a33626"));
-    hood.position.set(0, 0.72, 0.38);
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.22, 0.5), paint("#a33626"));
+    hood.position.set(0, 0.54, 0.28);
     hood.castShadow = true;
     root.add(hood);
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.5), paint("#2e3236"));
-    seat.position.set(0, 0.7, -0.35);
-    root.add(seat);
-    for (const sx of [-0.3, 0.3]) {
-      const strut = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.72, 0.04), paint("#3a3f45", 0.6));
-      strut.position.set(sx, 0.85, -0.72);
+    const handleDir = new THREE.Vector3(0, 0.65, -0.55).normalize();
+    for (const sx of [-0.18, 0.18]) {
+      const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.92, 8), paint("#3a3f45", 0.6));
+      strut.position.set(sx, 0.72, -0.78);
+      strut.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), handleDir);
       root.add(strut);
     }
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.05, 0.05), paint("#3a3f45", 0.6));
-    bar.position.set(0, 1.2, -0.78);
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, 0.06), paint("#2e3236"));
+    bar.position.set(0, 1.05, -1.08);
     root.add(bar);
+    // The blade spins just under the deck: visible from a low angle, never poking out.
     const blade = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.5, 0.5, 0.035, 20),
+      new THREE.CylinderGeometry(0.42, 0.42, 0.03, 20),
       paint("#8a9096", 0.7),
     );
-    blade.position.y = 0.14;
+    blade.position.y = 0.11;
     root.add(blade);
     this.mowerBlade = blade;
-    for (const sx of [-0.5, 0.5]) {
+    for (const sx of [-0.36, 0.36]) {
       const wheel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.16, 0.16, 0.08, 12),
+        new THREE.CylinderGeometry(0.07, 0.07, 0.05, 12),
         paint("#2e3236"),
       );
       wheel.rotation.x = Math.PI / 2;
-      wheel.position.set(sx, 0.16, 0);
+      wheel.position.set(sx, 0.07, 0.42);
+      root.add(wheel);
+    }
+    for (const sx of [-0.38, 0.38]) {
+      const wheel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.13, 0.13, 0.06, 12),
+        paint("#2e3236"),
+      );
+      wheel.rotation.x = Math.PI / 2;
+      wheel.position.set(sx, 0.13, -0.35);
       root.add(wheel);
     }
     this.scene.add(root);
@@ -884,18 +899,20 @@ export class GameScene {
     if (kind === "chair") {
       const tint = new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.8 });
       const wood = new THREE.MeshStandardMaterial({ color: "#6c5c46", roughness: 0.8 });
+      // The collider is a 0.28 x 0.45 x 0.28 cuboid centred on the root, so at
+      // rest the body spans -0.45..+0.45: floor to the top of the backrest.
       const seat = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.1, 0.5), tint);
-      seat.position.y = -0.3;
+      seat.position.y = -0.05;
       seat.castShadow = true;
       seat.receiveShadow = true;
       root.add(seat);
-      const back = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.62, 0.09), wood);
-      back.position.set(0, 0.13, -0.21);
+      const back = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.45, 0.09), wood);
+      back.position.set(0, 0.225, -0.205);
       back.castShadow = true;
       root.add(back);
-      for (const [lx, lz] of [[-0.22, -0.19], [0.22, -0.19], [-0.22, 0.19], [0.22, 0.19]] as const) {
-        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.28, 0.07), wood);
-        leg.position.set(lx, -0.31, lz);
+      for (const [lx, lz] of [[-0.22, -0.18], [0.22, -0.18], [-0.22, 0.18], [0.22, 0.18]] as const) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.35, 0.07), wood);
+        leg.position.set(lx, -0.275, lz);
         root.add(leg);
       }
       return root;
@@ -908,9 +925,11 @@ export class GameScene {
       top.castShadow = true;
       top.receiveShadow = true;
       root.add(top);
+      // Legs run from the collider bottom (-0.38, the floor at rest) up to the
+      // top's underside (+0.30), so nothing floats in the gap.
       for (const [lx, lz] of [[-0.34, -0.34], [0.34, -0.34], [-0.34, 0.34], [0.34, 0.34]] as const) {
-        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.62, 0.09), wood);
-        leg.position.set(lx, -0.07, lz);
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.68, 0.09), wood);
+        leg.position.set(lx, -0.04, lz);
         leg.castShadow = true;
         root.add(leg);
       }
