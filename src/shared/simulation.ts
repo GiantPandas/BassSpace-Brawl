@@ -1,22 +1,20 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
+  ARENA,
   AUTO_RANGE,
   DOOR_SLAM,
   DOOR_TRAVEL,
   DOORS,
-  GRILL,
   HORN,
   IMPACT,
   LEVEL,
   MELEE,
-  MOWER,
-  POOL,
+  PADS,
   PROPS,
   propKind,
-  SLIP,
   SPAWNS,
   STEP,
-  TRAMPOLINE,
+  TINY_ARENA,
   WEAPON,
   WINDOW,
   WINDOWS,
@@ -179,22 +177,10 @@ export class Simulation {
   /** Breakable panes keyed by window id, plus ids shattered since the drain. */
   windows = new Map<number, WindowRuntime>();
   windowEvents: number[] = [];
-  /** Frames on which the explosive grill went off since the last drain. */
-  grillEvents: number[] = [];
   /** Chaos explosions since the last drain (authority only). */
   explosionEvents: { x: number; y: number; z: number }[] = [];
   /** Impacts worth hearing since the last drain (authority only, design doc §17). */
   impactEvents: { x: number; y: number; z: number; s: number }[] = [];
-  /** The lawn mower's patrol state (authority only; clients get a broadcast). */
-  private mower = {
-    x: MOWER.path[0].x,
-    z: MOWER.path[0].z,
-    leg: 1,
-    dirx: 1,
-    dirz: 0,
-  };
-  /** Player id → frame until which they are immune to the mower's next clip. */
-  private mowerCool = new Map<number, number>();
   /**
    * Junk cards ride on the prop itself (design doc §8): who threw it, what
    * that thrower had stacked, and whether this particular throw is angry or
@@ -380,65 +366,6 @@ export class Simulation {
       : undefined;
     if (heldCollider !== undefined) excluded.add(heldCollider);
     const filter = (col: RAPIER.Collider) => !excluded.has(col.handle);
-    if (s.pool > 0) {
-      // In the water: inert and floating until the launch tick spits you out.
-      s.vx = 0;
-      s.vz = 0;
-      s.vy = 0;
-      s.flags = 1;
-      s.y += (POOL.waterY - s.y) * Math.min(1, STEP * 8);
-      if (--s.pool === 0) {
-        // Spit out toward your own spawn; the flight follows.
-        const spawn = SPAWNS[(s.id - 1) % SPAWNS.length],
-          dxp = spawn[0] - s.x,
-          dzp = spawn[2] - s.z,
-          d = Math.max(0.001, Math.hypot(dxp, dzp));
-        s.vx = (dxp / d) * POOL.launchX;
-        s.vz = (dzp / d) * POOL.launchX;
-        s.vy = POOL.launchY;
-        // Out of the water: feet on the surface, not embedded in its collider.
-        s.y = POOL.surface + 0.85;
-        s.launch = POOL.launchTicks;
-      }
-      s.ack = input.seq;
-      c.body.setNextKinematicTranslation({ x: s.x, y: s.y, z: s.z });
-      return;
-    }
-    if (s.launch > 0) {
-      // Ballistic flight out of the pool: gravity and collisions, no steering.
-      const g = this.env === "low-gravity" ? CHAOS.lowGravityFactor : 1;
-      s.vy = Math.max(-30, s.vy - buildStats(s.build).gravity * g * STEP);
-      c.controller.computeColliderMovement(
-        c.collider,
-        { x: s.vx * STEP, y: s.vy * STEP, z: s.vz * STEP },
-        undefined,
-        undefined,
-        filter,
-      );
-      const m = c.controller.computedMovement();
-      s.x += m.x;
-      s.y += m.y;
-      s.z += m.z;
-      const grounded = c.controller.computedGrounded();
-      if (grounded || Math.abs(m.y - s.vy * STEP) > 0.001) s.vy = 0;
-      if (grounded) {
-        s.vx = 0;
-        s.vz = 0;
-      }
-      s.flags = grounded ? 1 : 0;
-      if (--s.launch === 0) {
-        s.vx = 0;
-        s.vz = 0;
-      }
-      s.ack = input.seq;
-      // Fell through the world or left the arena: that is an elimination.
-      if (!s.out && (s.y < -8 || !this.inArena(s.x, s.z))) {
-        s.out = 1;
-        s.hp = 0;
-      }
-      c.body.setNextKinematicTranslation({ x: s.x, y: s.y, z: s.z });
-      return;
-    }
     if (s.out) {
       // Eliminated: inert until the next round's respawn puts them back.
       s.vx = 0;
@@ -501,17 +428,8 @@ export class Simulation {
     // A shove wins the argument with your own legs until the stagger runs out.
     const st = buildStats(s.build),
       control = s.stagger > 0 ? WEAPON.control : 1,
-      slick =
-        (s.flags & 1) &&
-        (this.env === "slippery" ||
-          SLIP.patches.some((p) => {
-            const dxp = s.x - p.x,
-              dzp = s.z - p.z;
-            return dxp * dxp + dzp * dzp <= p.r * p.r;
-          }));
-    const steer =
-      st.steerRate *
-      (slick ? (this.env === "slippery" ? CHAOS.slipFactor : SLIP.factor) : 1);
+      slick = (s.flags & 1) && this.env === "slippery";
+    const steer = st.steerRate * (slick ? CHAOS.slipFactor : 1);
     s.vx += (dx - s.vx) * Math.min(1, STEP * steer) * control;
     s.vz += (dz - s.vz) * Math.min(1, STEP * steer) * control;
     if (s.stagger > 0) s.stagger--;
@@ -522,7 +440,7 @@ export class Simulation {
         if (st.rocketLegs)
           for (const p of this.players.values()) {
             const ps = p.state;
-            if (p === c || ps.out || ps.pool > 0) continue;
+            if (p === c || ps.out) continue;
             const dxp = ps.x - s.x,
               dzp = ps.z - s.z,
               dist = Math.hypot(dxp, dzp);
@@ -574,18 +492,20 @@ export class Simulation {
     s.x += m.x;
     s.y += m.y;
     s.z += m.z;
-    const impactVy = s.vy;
     if (c.controller.computedGrounded() || Math.abs(m.y - s.vy * STEP) > 0.001)
       s.vy = 0;
-    // The trampoline: a hard landing on the mat sends you skyward.
-    if (
-      c.controller.computedGrounded() &&
-      impactVy < -2 &&
-      Math.abs(s.x - TRAMPOLINE.x) <= TRAMPOLINE.rx &&
-      Math.abs(s.z - TRAMPOLINE.z) <= TRAMPOLINE.rz &&
-      s.y < 1.5
-    )
-      s.vy = TRAMPOLINE.bounce;
+    // A bounce pad: landing on it launches you toward its diagonal perch.
+    if (c.controller.computedGrounded()) {
+      for (const pad of PADS) {
+        const dxp = s.x - pad.x,
+          dzp = s.z - pad.z;
+        if (dxp * dxp + dzp * dzp <= pad.r * pad.r) {
+          s.vx = pad.vx;
+          s.vz = pad.vz;
+          s.vy = pad.bounce;
+        }
+      }
+    }
     s.yaw =
       ((((input.yaw + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) %
         (2 * Math.PI)) -
@@ -598,16 +518,6 @@ export class Simulation {
       (input.buttons & BUTTON.JUMP ? 8 : 0);
     if (s.flags & 1) s.jumps = 0;
     s.ack = input.seq;
-    // The pool: feet below the rim inside the basin take you out of combat.
-    const feet = s.y - (crouched ? 0.5 : 0.85);
-    if (
-      !s.out &&
-      s.vy <= 2 &&
-      feet < POOL.rim &&
-      Math.abs(s.x - POOL.x) <= POOL.rx &&
-      Math.abs(s.z - POOL.z) <= POOL.rz
-    )
-      s.pool = POOL.drown;
     // Fell through the world or left the arena: that is an elimination.
     if (!s.out && (s.y < -8 || !this.inArena(s.x, s.z))) {
       s.out = 1;
@@ -797,8 +707,6 @@ export class Simulation {
   shoot(playerId: number): Shot | null {
     const c = this.players.get(playerId);
     if (!c || PROPS[c.state.held - 1]?.kind !== "gun") return null;
-    // In the water, out of the fight: no shots.
-    if (c.state.pool > 0) return null;
     if (this.frame < (this.cooldowns.get(playerId) ?? 0)) return null;
     if ((this.reloadAt.get(playerId) ?? -1) > this.frame) return null;
     const s = c.state,
@@ -907,8 +815,6 @@ export class Simulation {
   swing(playerId: number): Swing | null {
     const c = this.players.get(playerId);
     if (!c || propKind(c.state.held) !== "bat") return null;
-    // In the water, out of the fight: no swings either.
-    if (c.state.pool > 0) return null;
     if (this.frame < (this.meleeCooldowns.get(playerId) ?? 0)) return null;
     this.meleeCooldowns.set(playerId, this.frame + MELEE.cooldown);
     const s = c.state,
@@ -1166,17 +1072,10 @@ export class Simulation {
           this.removePellet(id);
       }
       this.handleCollisions();
-      // The explosive grill: on its own clock, an extremely bad place to stand.
-      if (this.frame % GRILL.period === 0) {
-        this.grillEvents.push(this.frame);
-        this.grillBoom();
-      }
-      // The lawn mower: a moving hazard on its own patrol loop.
-      this.mowerStep();
       // Chaos random explosions: on their own clock, anywhere in the arena.
       if (this.env === "explosions" && this.frame % CHAOS.explosion.period === 0) {
-        const x = -13 + Math.random() * 26,
-          z = -26 + Math.random() * 15;
+        const x = ARENA.minX + Math.random() * (ARENA.maxX - ARENA.minX),
+          z = ARENA.minZ + Math.random() * (ARENA.maxZ - ARENA.minZ);
         this.explosionEvents.push({ x, y: 0.5, z });
         this.boomAt(
           { x, y: 0.5, z },
@@ -1217,7 +1116,7 @@ export class Simulation {
             s = door.def.s;
           for (const c of this.players.values()) {
             const ps = c.state;
-            if (ps.out || ps.pool > 0 || door.slammed.has(ps.id)) continue;
+            if (ps.out || door.slammed.has(ps.id)) continue;
             if (
               Math.abs(ps.x - t.x) < s[0] / 2 + 0.4 &&
               Math.abs(ps.y - t.y) < s[1] / 2 + 0.9 &&
@@ -1234,17 +1133,6 @@ export class Simulation {
         }
       }
     }
-  }
-  /** Who a collider belongs to, and what speed it is moving at right now. */
-  private velocityOf(h: number) {
-    const e = this.entities.get(h);
-    if (!e) return { x: 0, y: 0, z: 0 };
-    if (e.kind === "player") {
-      const s = this.players.get(e.id)?.state;
-      return s ? { x: s.vx, y: s.vy, z: s.vz } : { x: 0, y: 0, z: 0 };
-    }
-    const v = e.body!.linvel();
-    return { x: v.x, y: v.y, z: v.z };
   }
   /** The speed a contact actually had: pre-step for dynamic bodies, since restitution has already resolved by the time events arrive. */
   private impactVelocityOf(h: number) {
@@ -1280,7 +1168,7 @@ export class Simulation {
   ) {
     for (const c of this.players.values()) {
       const ps = c.state;
-      if (ps.out || ps.pool > 0) continue;
+      if (ps.out) continue;
       const dxp = ps.x - t.x,
         dzp = ps.z - t.z,
         dist = Math.hypot(dxp, dzp);
@@ -1295,90 +1183,6 @@ export class Simulation {
       const dmg = damage * fall;
       ps.hp = Math.max(0, ps.hp - dmg);
       if (!ps.hp) ps.out = 1;
-    }
-  }
-  /** The explosive grill's blast: a radial shove + lift + HP on its own clock. */
-  private grillBoom() {
-    for (const c of this.players.values()) {
-      const ps = c.state;
-      if (ps.out || ps.pool > 0) continue;
-      const dxp = ps.x - GRILL.x,
-        dzp = ps.z - GRILL.z,
-        dist = Math.hypot(dxp, dzp);
-      if (dist > GRILL.radius || Math.abs(ps.y - 0.5) > 3) continue;
-      const fall = Math.max(0.2, 1 - dist / GRILL.radius);
-      if (dist > 0.001) {
-        ps.vx += (dxp / dist) * GRILL.force * fall;
-        ps.vz += (dzp / dist) * GRILL.force * fall;
-      }
-      ps.vy = Math.max(ps.vy, 0) + GRILL.lift * fall;
-      ps.stagger = WEAPON.stagger;
-      ps.hp = Math.max(0, ps.hp - GRILL.damage * fall);
-      if (!ps.hp) ps.out = 1;
-    }
-  }
-  /** The mower's position, for the host's 10 Hz broadcast. */
-  mowerPosition() {
-    return { x: this.mower.x, z: this.mower.z };
-  }
-  /** One tick of the patrol loop, plus whatever it just ran over. */
-  private mowerStep() {
-    const m = this.mower;
-    const t = MOWER.path[m.leg];
-    const dx = t.x - m.x,
-      dz = t.z - m.z,
-      d = Math.hypot(dx, dz);
-    const stepLen = MOWER.speed * STEP;
-    if (d <= stepLen) {
-      m.x = t.x;
-      m.z = t.z;
-      m.leg = (m.leg + 1) % MOWER.path.length;
-    } else {
-      m.dirx = dx / d;
-      m.dirz = dz / d;
-      m.x += m.dirx * stepLen;
-      m.z += m.dirz * stepLen;
-    }
-    for (const c of this.players.values()) {
-      const ps = c.state;
-      if (ps.out || ps.pool > 0) continue;
-      if (this.frame < (this.mowerCool.get(ps.id) ?? 0)) continue;
-      const dxp = ps.x - m.x,
-        dzp = ps.z - m.z,
-        dist = Math.hypot(dxp, dzp);
-      // A normal jump can't clear it; a trampoline launch can.
-      if (dist > MOWER.radius || Math.abs(ps.y - 0.6) > 1.5) continue;
-      const fall = Math.max(0.25, 1 - dist / MOWER.radius);
-      // Mostly the way it is driving, a little off to the side.
-      ps.vx += m.dirx * MOWER.force * fall + (dxp / dist) * MOWER.force * 0.4 * fall;
-      ps.vz += m.dirz * MOWER.force * fall + (dzp / dist) * MOWER.force * 0.4 * fall;
-      ps.vy = Math.max(ps.vy, 0) + MOWER.lift * fall;
-      ps.stagger = WEAPON.stagger;
-      ps.hp = Math.max(0, ps.hp - MOWER.damage * fall);
-      if (!ps.hp) ps.out = 1;
-      this.mowerCool.set(ps.id, this.frame + MOWER.cooldown);
-      if (this.impactEvents.length < 24) {
-        this.impactEvents.push({
-          x: ps.x,
-          y: ps.y + 0.3,
-          z: ps.z,
-          s: Math.min(1, (MOWER.force * fall) / IMPACT.full),
-        });
-      }
-    }
-    // Loose junk gets flung along with it.
-    for (const [id, body] of this.props) {
-      if (id >= PELLET_ID_BASE) continue;
-      const t2 = body.translation();
-      const dxp = t2.x - m.x,
-        dzp = t2.z - m.z,
-        dist = Math.hypot(dxp, dzp);
-      if (dist > MOWER.radius + 0.6 || Math.abs(t2.y - 0.4) > 1) continue;
-      const v = body.linvel();
-      body.setLinvel(
-        { x: v.x + m.dirx * 6, y: v.y, z: v.z + m.dirz * 6 },
-        true,
-      );
     }
   }
   /** RICOCHET: after a hit the pellet leaves toward the nearest player. */
@@ -1457,8 +1261,9 @@ export class Simulation {
         tx = target.x;
         ty = target.y;
         tz = target.z;
-        // The floor's friction eats 14.4 m/s², so the hunt has to out-pull it.
-        accel = 20;
+        // The floor's friction eats 14.4 m/s², so the hunt has to out-pull it
+        // — and out-turn a 10 m/s throw, which wants a turning radius near 2 m.
+        accel = 60;
         cap = 12;
       } else if (meta.magnet) {
         const s = this.players.get(meta.thrower)?.state;
@@ -1510,8 +1315,9 @@ export class Simulation {
   /**
    * Impacts worth hearing (design doc §17): every contact above `IMPACT.floor`
    * relative m/s is recorded with a normalized strength so clients can scale
-   * sound and sparks. `rel` is the pre-step speed, not the post-bounce
-   * remainder the damage path reads. Pellet-on-player pairs are skipped — the
+   * sound and sparks. `rel` is the pre-step speed — by the time events drain,
+   * restitution has already rewritten the dynamic bodies — and it is the same
+   * number the damage path pays out. Pellet-on-player pairs are skipped — the
    * shot broadcast already tells those. Authority only; nothing affects physics.
    */
   private recordImpact(
@@ -1543,12 +1349,10 @@ export class Simulation {
       if (!started) return;
       const a = this.entities.get(h1),
         b = this.entities.get(h2);
-      const va = this.velocityOf(h1),
-        vb = this.velocityOf(h2);
-      const rel = Math.hypot(va.x - vb.x, va.y - vb.y, va.z - vb.z);
       const pa = this.impactVelocityOf(h1),
         pb = this.impactVelocityOf(h2);
-      this.recordImpact(a, b, Math.hypot(pa.x - pb.x, pa.y - pb.y, pa.z - pb.z));
+      const rel = Math.hypot(pa.x - pb.x, pa.y - pb.y, pa.z - pb.z);
+      this.recordImpact(a, b, rel);
       const pellet = a?.kind === "pellet" ? a : b?.kind === "pellet" ? b : null;
       if (pellet) {
         const other = a?.kind === "pellet" ? b : a,
@@ -1564,8 +1368,7 @@ export class Simulation {
         }
         if (other?.kind === "player") {
           const s = this.players.get(other.id)?.state;
-          // The water soaks up the hit for whoever is in it.
-          if (s && !s.out && s.pool === 0) {
+          if (s && !s.out) {
             // CCD resolves the hit before events arrive, so read the velocity
             // the pellet had *before* this step for both direction and damage.
             const impact = Math.hypot(
@@ -1584,7 +1387,7 @@ export class Simulation {
               // The victim's momentum bleeds into whoever is standing close.
               for (const p of this.players.values()) {
                 const ps = p.state;
-                if (ps.id === other.id || ps.out || ps.pool > 0) continue;
+                if (ps.id === other.id || ps.out) continue;
                 if (Math.hypot(ps.x - s.x, ps.z - s.z) > 2.2) continue;
                 ps.vx += (live.v.x / speed) * WEAPON.knock * mult * 0.4;
                 ps.vz += (live.v.z / speed) * WEAPON.knock * mult * 0.4;
@@ -1598,7 +1401,7 @@ export class Simulation {
           const t = live.body.translation();
           for (const p of this.players.values()) {
             const ps = p.state;
-            if (ps.out || ps.pool > 0) continue;
+            if (ps.out) continue;
             const dxp = ps.x - t.x,
               dzp = ps.z - t.z,
               dist = Math.hypot(dxp, dzp);
@@ -1631,7 +1434,7 @@ export class Simulation {
         // A player that smashes the glass feels it through the usual damage.
         if (other && other.kind === "player") {
           const os = this.players.get(other.id)!.state;
-          if (!os.pool) this.hurt(os, rel);
+          this.hurt(os, rel);
         }
         return;
       }
@@ -1647,12 +1450,10 @@ export class Simulation {
           meta =
             propE.kind === "prop" ? this.propMeta.get(propE.id) : undefined,
           tstats = meta ? buildStats(meta.build) : undefined;
-        if (!victim.pool) {
-          this.hurt(victim, tstats?.heavyJunk ? rel * 1.8 : rel);
-          if (tstats?.dangerousJunk && rel > COMBAT.threshold) {
-            const p = this.entityPosition(propE);
-            if (p) this.boomAt(p, 2.5, 4, 2, 6);
-          }
+        this.hurt(victim, tstats?.heavyJunk ? rel * 1.8 : rel);
+        if (tstats?.dangerousJunk && rel > COMBAT.threshold) {
+          const p = this.entityPosition(propE);
+          if (p) this.boomAt(p, 2.5, 4, 2, 6);
         }
       }
     });
@@ -1673,37 +1474,39 @@ export class Simulation {
   }
   /** Put everyone back at their spawn with full HP; the pellets are gone. */
   respawn() {
-    for (const c of this.players.values()) {
-      const s = c.state,
-        spawn = SPAWNS[(s.id - 1) % SPAWNS.length];
-      this.dropHeld(s.id);
-      s.x = spawn[0];
-      s.y = spawn[1];
-      s.z = spawn[2];
-      s.vx = 0;
-      s.vy = 0;
-      s.vz = 0;
-      s.yaw = 0;
-      s.pitch = 0;
-      s.flags = 0;
-      s.held = 0;
-      s.stagger = 0;
-      s.jumps = 0;
-      s.hp = COMBAT.hpMax;
-      s.out = 0;
-      s.pool = 0;
-      s.launch = 0;
-      s.ammo = WEAPON.ammo;
-      this.reloadAt.delete(s.id);
-      this.cooldowns.delete(s.id);
-      this.meleeCooldowns.delete(s.id);
-      this.hornCooldowns.delete(s.id);
-      this.dashed.delete(s.id);
-      c.collider.setShape(new RAPIER.Capsule(0.55, 0.3));
-      c.body.setTranslation({ x: s.x, y: s.y, z: s.z }, true);
-      c.body.setNextKinematicTranslation({ x: s.x, y: s.y, z: s.z });
-    }
+    for (const c of this.players.values()) this.respawnPlayer(c.state.id);
     this.clearPellets();
+  }
+  /** Put one player back at their spawn with full HP. */
+  respawnPlayer(playerId: number) {
+    const c = this.players.get(playerId);
+    if (!c) return;
+    const s = c.state,
+      spawn = SPAWNS[(s.id - 1) % SPAWNS.length];
+    this.dropHeld(s.id);
+    s.x = spawn[0];
+    s.y = spawn[1];
+    s.z = spawn[2];
+    s.vx = 0;
+    s.vy = 0;
+    s.vz = 0;
+    s.yaw = 0;
+    s.pitch = 0;
+    s.flags = 0;
+    s.held = 0;
+    s.stagger = 0;
+    s.jumps = 0;
+    s.hp = COMBAT.hpMax;
+    s.out = 0;
+    s.ammo = WEAPON.ammo;
+    this.reloadAt.delete(s.id);
+    this.cooldowns.delete(s.id);
+    this.meleeCooldowns.delete(s.id);
+    this.hornCooldowns.delete(s.id);
+    this.dashed.delete(s.id);
+    c.collider.setShape(new RAPIER.Capsule(0.55, 0.3));
+    c.body.setTranslation({ x: s.x, y: s.y, z: s.z }, true);
+    c.body.setNextKinematicTranslation({ x: s.x, y: s.y, z: s.z });
   }
   private dropHeld(playerId: number) {
     const c = this.players.get(playerId);
@@ -1721,15 +1524,10 @@ export class Simulation {
     body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     body.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
-  /** The arena is the house, the workshop, the yard and the patio. */
+  /** The arena is the stage and its satellites: outside it, or below y=-8, you are out. */
   private inArena(x: number, z: number) {
-    if (this.env === "tiny-arena") return x >= -8 && x <= 8 && z >= -11 && z <= 11;
-    return (
-      (x >= -14 && x <= 14 && z >= -11 && z <= 11) ||
-      (x >= 14 && x <= 30 && z >= -9 && z <= 9) ||
-      (x >= -13 && x <= 13 && z >= -26 && z <= -11) ||
-      (x >= -8 && x <= 8 && z >= 11 && z <= 16)
-    );
+    const b = this.env === "tiny-arena" ? TINY_ARENA : ARENA;
+    return x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ;
   }
   propStates(): PropState[] {
     return [...this.props].map(([id, b]) => {

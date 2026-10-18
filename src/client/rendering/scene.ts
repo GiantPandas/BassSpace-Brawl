@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
-import { CHARACTER_PALETTE, DOORS, GRILL, LEVEL, MOWER, PALETTE, PROPS, SLIP, WINDOWS, type PropKind, type Vec3 } from "../../shared/level";
+import { CHARACTER_PALETTE, DOORS, LEVEL, PADS, PALETTE, PROPS, WINDOWS, type PropKind, type Vec3 } from "../../shared/level";
 import { PELLET_ID_BASE, type DoorState, type WindowState } from "../../shared/simulation";
 import { cardBit } from "../../shared/upgrades";
 import {
@@ -50,10 +50,10 @@ type Driven = { bone: THREE.Object3D; posed: THREE.Quaternion };
  * The lobby camera orbits this point. OVERVIEW is the resting framing the landing page was
  * composed around; the drift, the visitor's drag and the arrival flight all ride on top of it.
  */
-const FOCUS = new THREE.Vector3(7.1, 0.8, -0.8);
-const OVERVIEW = { yaw: 0.632, pitch: 0.46, dist: 14 };
+const FOCUS = new THREE.Vector3(0, 0.5, 0);
+const OVERVIEW = { yaw: 0.632, pitch: 0.46, dist: 26 };
 /** How far a visitor may swing the camera before it stops giving. */
-const SWING = { yaw: 0.62, pitch: [0.28, 0.82], dist: [11, 24] };
+const SWING = { yaw: 0.62, pitch: [0.28, 0.82], dist: [16, 40] };
 const ARRIVAL = 2.4;
 const MOUTH_OPEN = 0.5;
 const HEAD_TILT = 0.55;
@@ -153,12 +153,6 @@ export class GameScene {
   private cameraSize = new THREE.Vector3();
   private cameraFocus = new THREE.Vector3();
   private cameraBoom = new THREE.Vector3();
-  /** Distant outdoor scenery is not part of the landing-page dollhouse composition. */
-  private horizon = new THREE.Group();
-  /** The lawn mower, driven by the authority's 10 Hz position broadcasts. */
-  private mowerRoot = new THREE.Group();
-  private mowerBlade: THREE.Mesh | null = null;
-  private mowerTarget: { x: number; z: number } | null = null;
   constructor(container: HTMLElement) {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
@@ -171,14 +165,14 @@ export class GameScene {
     this.labels = document.createElement("div");
     this.labels.className = "world-labels";
     container.append(this.labels);
-    this.scene.fog = new THREE.Fog(LOBBY_SKY, 25, 65);
+    this.scene.fog = new THREE.Fog(LOBBY_SKY, 35, 90);
     this.scene.add(new THREE.HemisphereLight("#f6eedb", "#728078", 2.3));
     const sun = new THREE.DirectionalLight("#fff1c8", 3.2);
     sun.position.set(-3, 19, -13);
     sun.target.position.set(6, 0, -8);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
-    // The room, the hall, the workshop and the yard all sit under one shadow camera.
+    // Every platform on the stage sits under one shadow camera.
     sun.shadow.camera.left = -32;
     sun.shadow.camera.right = 32;
     sun.shadow.camera.top = 32;
@@ -189,94 +183,22 @@ export class GameScene {
       const mesh = this.box(b.p, b.s, b.color);
       if (b.hide) this.front.push(mesh);
     }
-    // Floorboard seams, room divider, and practical fixtures are inexpensive geometry.
-    for (let x = -13.5; x < 14; x += 0.7)
-      this.box([x, 0.008, 0], [0.013, 0.012, 21.6], "#9f927d");
-    const rug = this.box([-8.5, 0.02, -5.8], [7, 0.025, 5.2], "#b45c41");
-    for (let i = 0; i < 5; i++)
-      this.box([-8.5, 0.04, -7.5 + i * 0.8], [6.5, 0.01, 0.035], "#dbb087");
-    for (const x of [-10, -4, 2, 8]) {
-      this.box([x, 5.55, 0], [0.18, 0.24, 22], "#756c57");
-      const lamp = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.2, 0.55, 0.25, 12),
+    // The Stage: the LEVEL boxes above already render every platform, satellite,
+    // perch and bounce pad as a solid slab. PADS adds a visible spring on each mat.
+    for (const pad of PADS) {
+      const coil = new THREE.Mesh(
+        new THREE.TorusGeometry(pad.r * 0.6, 0.05, 10, 28),
         new THREE.MeshStandardMaterial({
-          color: "#d4d5b7",
-          emissive: "#a5a97e",
-          emissiveIntensity: 0.35,
+          color: "#a89443",
+          roughness: 0.35,
+          metalness: 0.6,
         }),
       );
-      lamp.position.set(x, 4.7, -1);
-      this.scene.add(lamp);
-      this.roomLight([x, 4.45, -1], 28, 10);
-      this.box([x, 5.1, -1], [0.035, 0.7, 0.035], "#3a4840");
+      coil.rotation.x = Math.PI / 2;
+      coil.position.set(pad.x, 0.12, pad.z);
+      coil.castShadow = true;
+      this.scene.add(coil);
     }
-    for (const x of [-10, -5, 0]) {
-      this.box([x, 3.05, -10.75], [3.8, 2.5, 0.08], "#93ada1");
-      this.box([x, 3.05, -10.65], [0.08, 2.6, 0.14], "#e9e2cc");
-      this.box([x, 3.05, -10.65], [3.9, 0.08, 0.14], "#e9e2cc");
-      this.box([x, 1.75, -10.5], [4, 0.15, 0.45], "#e6ddc5");
-    }
-    this.sign(
-      "THE COMMON ROOM",
-      [-4, 2.3, -10.46],
-      4.1,
-      0.5,
-      "#405b4d",
-      "#e5deca",
-    );
-    this.sign(
-      "01  /  GATHER",
-      [-9, 3.2, 10.76],
-      4,
-      0.7,
-      "#4b6152",
-      "#d7cfbc",
-      Math.PI,
-    );
-    this.sign(
-      "02  /  THE HALL",
-      [5.23, 3.9, 0],
-      3,
-      0.45,
-      "#edebd7",
-      "#678276",
-      Math.PI / 2,
-    );
-    this.sign(
-      "MAKE SOMETHING\nWITH YOUR FRIENDS.",
-      [-13.76, 2.6, -2],
-      3.6,
-      1.5,
-      "#455a4b",
-      "#c2b18c",
-      Math.PI / 2,
-    );
-    for (const p of [
-      [-12.3, 0, -9.2],
-      [-12.4, 0, 5],
-      [3.7, 0, -9],
-      [12.5, 0, 8],
-    ])
-      this.plant(p[0], p[2]);
-    this.box([-0.3, 0.04, 3.8], [4, 0.035, 0.06], "#e6dcc7");
-    this.box([-2.3, 0.04, 4.8], [0.06, 0.035, 2], "#e6dcc7");
-    this.box([1.7, 0.04, 4.8], [0.06, 0.035, 2], "#e6dcc7");
-    const board = this.box([-3, 1.65, 8.5], [2.4, 2.8, 0.15], "#556c5b");
-    this.box([-4, 0.7, 8.5], [0.09, 1.4, 0.3], "#6c5c46");
-    this.box([-2, 0.7, 8.5], [0.09, 1.4, 0.3], "#6c5c46");
-    this.sign(
-      "A LITTLE SPACE\nFOR BIG NONSENSE",
-      [-3, 1.8, 8.39],
-      2,
-      1.1,
-      "#ede5cc",
-      "#556c5b",
-      Math.PI,
-    );
-    this.workshop();
-    this.yard();
-    this.makeMower();
-    this.outdoorHorizon();
     PROPS.forEach((prop, i) => {
       const root = this.makeProp(i);
       root.position.set(...prop.p);
@@ -358,9 +280,9 @@ export class GameScene {
       .then((asset) => {
         this.asset = asset;
         const cast = [
-          { p: [5.8, 0, -0.1], color: 2, phase: 2.75 },
-          { p: [7.1, 0, -2.15], color: 1, phase: 4.85 },
-          { p: [8.5, 0, -0.1], color: 3, phase: 0.65 },
+          { p: [-2, 0, -1], color: 2, phase: 2.75 },
+          { p: [0, 0, -2.5], color: 1, phase: 4.85 },
+          { p: [2, 0, -1], color: 3, phase: 0.65 },
         ] as const;
         for (const [i, performer] of cast.entries()) {
           const a = this.avatar(60000 + i, "", performer.color);
@@ -453,336 +375,7 @@ export class GameScene {
       this.scene.add(leaf);
     }
   }
-  /** Decoration for the workshop east of the hall. Geometry only, no colliders. */
-  workshop() {
-    for (const z of [-6, 0, 6]) this.box([22, 5.5, z], [16, 0.22, 0.2], "#8d8069");
-    for (const [x, z] of [
-      [17, -8.6],
-      [22, -8.6],
-      [26.5, -1.6],
-      [27, -5.5],
-    ]) {
-      const lamp = new THREE.Mesh(
-        new THREE.BoxGeometry(1.1, 0.16, 0.5),
-        new THREE.MeshStandardMaterial({
-          color: "#e6e3c8",
-          emissive: "#c9c38c",
-          emissiveIntensity: 0.5,
-        }),
-      );
-      lamp.position.set(x, 4.3, z);
-      this.scene.add(lamp);
-      this.roomLight([x, 4.12, z], 25, 9);
-    }
-    // A pegboard of tool silhouettes over the bench.
-    this.box([18, 2.6, -8.7], [6.4, 2.4, 0.1], "#7d8f86");
-    for (let i = 0; i < 9; i++)
-      this.box(
-        [15.4 + i * 0.65, 2.4 + (i % 3) * 0.55, -8.62],
-        [i % 2 ? 0.12 : 0.34, i % 2 ? 0.9 : 0.16, 0.06],
-        "#3f4a44",
-      );
-    for (let i = 0; i < 4; i++)
-      this.box([16.2 + i * 1.2, 1.02, -6], [0.5, 0.24, 0.9], "#4d5a52");
-    // The mezzanine reading corner, and a lamp over the stair head.
-    this.box([10.6, 3.05, -4.4], [1.2, 0.45, 1.6], "#6d5c44");
-    this.box([10.6, 3.35, -3.55], [1.2, 0.6, 0.14], "#6d5c44");
-    const glow = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.16, 0.42, 0.22, 12),
-      new THREE.MeshStandardMaterial({
-        color: "#d4d5b7",
-        emissive: "#a5a97e",
-        emissiveIntensity: 0.4,
-      }),
-    );
-    glow.position.set(12, 4.5, -6.5);
-    this.scene.add(glow);
-    this.roomLight([12, 4.3, -6.5], 22, 8);
-    this.box([12, 5.15, -6.5], [0.035, 1.1, 0.035], "#3a4840");
-    this.sign(
-      "05  /  THE MEZZANINE",
-      [9.66, 3.35, -5.7],
-      2.6,
-      0.4,
-      "#edebd7",
-      "#4e5f56",
-      -Math.PI / 2,
-    );
-    this.sign(
-      "03  /  THE WORKSHOP",
-      [13.55, 3.75, 0],
-      3,
-      0.45,
-      "#edebd7",
-      "#4e5f56",
-      -Math.PI / 2,
-    );
-    this.sign(
-      "TAKE ONE.\nMIND THE WINDOWS.",
-      [24.26, 4.1, -5.7],
-      1.5,
-      0.9,
-      "#e8e2cc",
-      "#5a6670",
-      Math.PI / 2,
-    );
-    this.sign(
-      "EVERYTHING HERE\nIS A LOAN.",
-      [29.76, 2.8, 3],
-      3.4,
-      1.4,
-      "#4a5a52",
-      "#c8bfa6",
-      -Math.PI / 2,
-    );
-    for (const p of [
-      [15.5, 0, 8],
-      [29, 0, 7.5],
-    ])
-      this.plant(p[0], p[2]);
-  }
-  /** Decoration for the yard: paint, planting, lights and a backboard. */
-  yard() {
-    for (const z of [-13.2, -22.8])
-      this.box([5, 0.07, z], [11.6, 0.02, 0.1], "#f2ece0");
-    for (const x of [-0.8, 10.8])
-      this.box([x, 0.07, -18], [0.1, 0.02, 9.6], "#f2ece0");
-    this.box([5, 0.07, -18], [11.6, 0.02, 0.1], "#f2ece0");
-    for (let i = 0; i < 26; i++) {
-      const a = (i / 26) * Math.PI * 2;
-      this.box(
-        [5 + Math.cos(a) * 2.6, 0.07, -18 + Math.sin(a) * 2.6],
-        [0.16, 0.02, 0.16],
-        "#f2ece0",
-      );
-    }
-    for (const [x, z] of [
-      [-11.5, -13.5],
-      [11.5, -13.5],
-      [-11.5, -24.5],
-      [11.5, -25],
-    ]) {
-      this.box([x, 0.3, z], [2.2, 0.6, 2.2], "#a4795a");
-      this.plant(x, z + 0.1);
-    }
-    // Festoon lights strung between the yard walls.
-    for (let i = 0; i <= 14; i++) {
-      const x = -12 + i * 1.72,
-        sag = Math.sin((i / 14) * Math.PI) * 0.5;
-      const bulb = new THREE.Mesh(
-        new THREE.SphereGeometry(0.09, 8, 6),
-        new THREE.MeshStandardMaterial({
-          color: "#fdf3d0",
-          emissive: "#f0dfa0",
-          emissiveIntensity: 0.9,
-        }),
-      );
-      bulb.position.set(x, 2.9 - sag, -14.5);
-      this.scene.add(bulb);
-      this.box([x, 3.02 - sag, -14.5], [1.75, 0.02, 0.02], "#5a5c50");
-    }
-    for (let i = 0; i < 40; i++) {
-      const x = -12 + ((i * 7.31) % 24),
-        z = -25.5 + ((i * 4.13) % 13);
-      if (x > -1.6 && x < 11.6 && z > -23.8 && z < -12.2) continue;
-      const tuft = new THREE.Mesh(
-        new THREE.ConeGeometry(0.16, 0.42, 5),
-        new THREE.MeshStandardMaterial({ color: i % 3 ? "#7f9463" : "#93a86f" }),
-      );
-      tuft.position.set(x, 0.21, z);
-      tuft.rotation.y = i;
-      this.scene.add(tuft);
-    }
-    const shedLight = new THREE.Mesh(
-      new THREE.SphereGeometry(0.12, 10, 7),
-      new THREE.MeshStandardMaterial({
-        color: "#fff4d1",
-        emissive: "#efd58c",
-        emissiveIntensity: 1.1,
-      }),
-    );
-    shedLight.position.set(-9.5, 2.35, -22);
-    this.scene.add(shedLight);
-    this.roomLight([-9.5, 2.18, -22], 13, 5);
-    this.box([-6, 0.95, -12.9], [9, 0.1, 0.12], "#6d5c44");
-    this.sign(
-      "04  /  THE YARD",
-      [3.25, 3.9, -10.46],
-      3.4,
-      0.5,
-      "#405b4d",
-      "#e5deca",
-    );
-    this.sign(
-      "04  /  THE YARD",
-      [3.25, 3.6, -11.24],
-      3.4,
-      0.5,
-      "#e5deca",
-      "#4b6152",
-      Math.PI,
-    );
-    this.sign(
-      "MIND THE\nBOUNCE.",
-      [0, 1.7, -25.76],
-      3,
-      1.2,
-      "#48594c",
-      "#cfc7b2",
-    );
-    this.sign(
-      "06  /  THE SHED",
-      [-9.7, 2.1, -19.68],
-      2.4,
-      0.4,
-      "#efe7cf",
-      "#6a5240",
-    );
-    // The pool's water: a visual surface that later phases will learn to be deadly.
-    const water = new THREE.Mesh(
-      new THREE.BoxGeometry(4, 0.1, 3),
-      new THREE.MeshStandardMaterial({
-        color: "#7fc8d8",
-        roughness: 0.25,
-        transparent: true,
-        opacity: 0.55,
-      }),
-    );
-    water.position.set(-1.5, 0.62, -23);
-    this.scene.add(water);
-    // Sprinkler patches: wet grass that barely bites, with their little heads.
-    for (const p of SLIP.patches) {
-      const wet = new THREE.Mesh(
-        new THREE.CircleGeometry(p.r, 24),
-        new THREE.MeshStandardMaterial({
-          color: "#5f7a58",
-          roughness: 0.35,
-          transparent: true,
-          opacity: 0.5,
-        }),
-      );
-      wet.rotation.x = -Math.PI / 2;
-      wet.position.set(p.x, 0.012, p.z);
-      this.scene.add(wet);
-      const head = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.05, 0.07, 0.14, 8),
-        new THREE.MeshStandardMaterial({
-          color: "#9aa3ab",
-          roughness: 0.4,
-          metalness: 0.6,
-        }),
-      );
-      head.position.set(p.x + p.r * 0.75, 0.08, p.z - p.r * 0.5);
-      this.scene.add(head);
-    }
-  }
-  /** The lawn mower: a red push mower that mows the yard on its own loop. */
-  makeMower() {
-    const root = this.mowerRoot;
-    root.position.set(MOWER.path[0].x, 0, MOWER.path[0].z);
-    const paint = (color: string, metal = 0.15) =>
-      new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: metal });
-    // A push mower: low deck on four wheels, engine hood up front (+z is the
-    // direction of travel), and a handle raked back over two diagonal struts.
-    const deck = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.3, 1.1), paint("#c8452e"));
-    deck.position.y = 0.28;
-    deck.castShadow = true;
-    root.add(deck);
-    const hood = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.22, 0.5), paint("#a33626"));
-    hood.position.set(0, 0.54, 0.28);
-    hood.castShadow = true;
-    root.add(hood);
-    const handleDir = new THREE.Vector3(0, 0.65, -0.55).normalize();
-    for (const sx of [-0.18, 0.18]) {
-      const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.92, 8), paint("#3a3f45", 0.6));
-      strut.position.set(sx, 0.72, -0.78);
-      strut.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), handleDir);
-      root.add(strut);
-    }
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, 0.06), paint("#2e3236"));
-    bar.position.set(0, 1.05, -1.08);
-    root.add(bar);
-    // The blade spins just under the deck: visible from a low angle, never poking out.
-    const blade = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.42, 0.42, 0.03, 20),
-      paint("#8a9096", 0.7),
-    );
-    blade.position.y = 0.11;
-    root.add(blade);
-    this.mowerBlade = blade;
-    for (const sx of [-0.36, 0.36]) {
-      const wheel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.07, 0.07, 0.05, 12),
-        paint("#2e3236"),
-      );
-      wheel.rotation.x = Math.PI / 2;
-      wheel.position.set(sx, 0.07, 0.42);
-      root.add(wheel);
-    }
-    for (const sx of [-0.38, 0.38]) {
-      const wheel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.13, 0.13, 0.06, 12),
-        paint("#2e3236"),
-      );
-      wheel.rotation.x = Math.PI / 2;
-      wheel.position.set(sx, 0.13, -0.35);
-      root.add(wheel);
-    }
-    this.scene.add(root);
-  }
-  /** A fresh position from the authority; render() walks toward it. */
-  updateMower(x: number, z: number) {
-    this.mowerTarget = { x, z };
-  }
-  /** Pale sky dressing beyond the yard walls: low-poly hills and a few soft clouds. */
-  outdoorHorizon() {
-    const hillGeometry = new THREE.SphereGeometry(1, 18, 10);
-    const hillColors = ["#789873", "#86a47c", "#6f906d", "#93ad83"];
-    const hills = [
-      [-31, -3.5, -54, 24, 11, 11],
-      [-10, -4.5, -58, 20, 10, 9],
-      [10, -3.8, -56, 25, 12, 11],
-      [34, -4.2, -52, 24, 10, 10],
-    ] as const;
-    hills.forEach(([x, y, z, sx, sy, sz], i) => {
-      const hill = new THREE.Mesh(
-        hillGeometry,
-        new THREE.MeshLambertMaterial({ color: hillColors[i] }),
-      );
-      hill.position.set(x, y, z);
-      hill.scale.set(sx, sy, sz);
-      hill.receiveShadow = true;
-      this.horizon.add(hill);
-    });
-
-    const puffGeometry = new THREE.SphereGeometry(1, 12, 8);
-    const cloudMaterial = new THREE.MeshBasicMaterial({ color: "#edf5f3" });
-    const clouds = [
-      [-19, 13, -43, 1.2],
-      [3, 16, -58, 1.45],
-      [26, 12, -47, 1.1],
-    ] as const;
-    for (const [x, y, z, scale] of clouds) {
-      const cloud = new THREE.Group();
-      for (const [dx, dy, dz, size] of [
-        [-1.5, 0, 0, 1.35],
-        [-0.45, 0.35, 0, 1.7],
-        [0.8, 0.1, 0, 1.45],
-        [1.7, -0.05, 0, 1.05],
-      ] as const) {
-        const puff = new THREE.Mesh(puffGeometry, cloudMaterial);
-        puff.position.set(dx, dy, dz);
-        puff.scale.set(size * 1.35, size * 0.65, size);
-        cloud.add(puff);
-      }
-      cloud.position.set(x, y, z);
-      cloud.scale.setScalar(scale);
-      this.horizon.add(cloud);
-    }
-    this.horizon.visible = false;
-    this.scene.add(this.horizon);
-  }
-  /** Children[0] is always the tintable body: `setHighlight` writes its emissive. */
+  /** A throwable prop's visual mesh. Children[0] is always the tintable body: `setHighlight` writes its emissive. */
   makeProp(i: number) {
     const root = new THREE.Group(),
       kind = PROPS[i].kind;
@@ -1037,30 +630,7 @@ export class GameScene {
       this.scene.add(shard);
     }
   }
-  /** The explosive grill's blast: a fireball and sparks over the grate. */
-  grillBoom() {
-    const p = new THREE.Vector3(GRILL.x, 1.0, GRILL.z);
-    const ball = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.55, 1),
-      new THREE.MeshBasicMaterial({
-        color: "#ff9a3c",
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      }),
-    );
-    ball.position.copy(p);
-    this.scene.add(ball);
-    this.effects.push({ mesh: ball, life: 0, ttl: 0.45, shrink: false, grow: 1.6 });
-    this.spark("#ffd27a", 0.35, p, 0.35);
-    this.spark(
-      "#ff9a3c",
-      0.22,
-      new THREE.Vector3(GRILL.x + 0.4, 1.3, GRILL.z),
-      0.3,
-    );
-  }
-  /** Chaos explosions told by the authority: a fireball and sparks at a point. */
+  /** Explosions told by the authority — chaos booms, dangerous junk blasts: fireball and sparks at a point. */
   boomAt(x: number, y: number, z: number) {
     const p = new THREE.Vector3(x, y + 0.5, z);
     const ball = new THREE.Mesh(
@@ -1124,7 +694,9 @@ export class GameScene {
     this.scene.add(mesh);
     this.effects.push({ mesh, life: 0, ttl, shrink: true });
   }
-  /** One shot: muzzle flash, a fading tracer, and a spark where it landed. */
+  /** Kept in the effects kit for a future laser-class weapon: muzzle flash, a
+   * fading tracer, and a spark where the line landed. The shove gun draws only
+   * the live pellet, so nothing calls this for plain shots. */
   tracer(shot: {
     x: number;
     y: number;
@@ -1500,13 +1072,12 @@ export class GameScene {
     this.playing = playing;
     for (const m of this.front) m.visible = playing;
     for (const p of this.preview) p.visible = !playing;
-    this.horizon.visible = playing;
     const sky = playing ? GAME_SKY : LOBBY_SKY;
     this.renderer.setClearColor(sky);
     if (this.scene.fog instanceof THREE.Fog) {
       this.scene.fog.color.copy(sky);
-      this.scene.fog.near = playing ? 38 : 25;
-      this.scene.fog.far = playing ? 88 : 65;
+      this.scene.fog.near = playing ? 48 : 35;
+      this.scene.fog.far = playing ? 110 : 90;
     }
   }
   private play(a: Avatar, desired: string, speed = 1) {
@@ -1878,23 +1449,6 @@ export class GameScene {
         Math.abs(p.y) < 1;
       a.label.style.display = visible ? "block" : "none";
       a.label.style.transform = `translate(-50%,-100%) translate(${(p.x * 0.5 + 0.5) * innerWidth}px,${(-p.y * 0.5 + 0.5) * innerHeight}px)`;
-    }
-    // The mower walks toward the latest broadcast at its own pace.
-    {
-      const target = this.mowerTarget,
-        p = this.mowerRoot.position;
-      if (target) {
-        const dx = target.x - p.x,
-          dz = target.z - p.z,
-          d = Math.hypot(dx, dz);
-        if (d > 0.001) {
-          const k = Math.min(1, (MOWER.speed * 1.25 * dt) / d);
-          p.x += dx * k;
-          p.z += dz * k;
-          this.mowerRoot.rotation.y = Math.atan2(dx, dz);
-        }
-      }
-      if (this.mowerBlade) this.mowerBlade.rotation.y += dt * 40;
     }
     this.renderer.render(this.scene, this.camera);
   }

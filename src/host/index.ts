@@ -777,6 +777,13 @@ export async function createHost(options: { maxRooms?: number } = {}) {
           room.match.phase === "lobby" ||
           room.match.phase === "match-end"
         ) {
+          // Nobody is "in the game" while the lobby waits: the void is a
+          // playground hazard there, so a fall just puts you back on your
+          // spawn. The round-start respawn in startCountdown keeps the
+          // elimination bookkeeping itself untouched.
+          if (room.match.phase === "lobby")
+            for (const c of room.sim.players.values())
+              if (c.state.out) room.sim.respawnPlayer(c.state.id);
           const connected = [...room.members.values()].filter((m) => m.ws);
           if (connected.length >= 2 && connected.every((m) => m.ready)) {
             // A fresh match: every build starts empty and stacks from there.
@@ -866,20 +873,6 @@ export async function createHost(options: { maxRooms?: number } = {}) {
         if (room.sim.windowEvents.length)
           for (const id of room.sim.windowEvents.splice(0))
             broadcast(room, { type: "window", id, broken: true });
-        // The grill's blast is told once; the shove rides the next snapshot.
-        if (room.sim.grillEvents.length) {
-          room.sim.grillEvents.splice(0);
-          broadcast(room, { type: "grill" });
-        }
-        // The mower walks on its own clock; 10 Hz is plenty for a lerp.
-        if (room.tick % 6 === 0) {
-          const mp = room.sim.mowerPosition();
-          broadcast(room, {
-            type: "mower",
-            x: Math.round(mp.x * 10) / 10,
-            z: Math.round(mp.z * 10) / 10,
-          });
-        }
         // Chaos explosions are told once; the shove rides the next snapshot.
         for (const e of room.sim.explosionEvents.splice(0))
           broadcast(room, { type: "explosion", ...e });

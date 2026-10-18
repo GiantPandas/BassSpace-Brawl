@@ -537,7 +537,8 @@ body.turning * {
 }
 .interact {
   position: absolute;
-  top: calc(50% + 25px);
+  /* The pickup hints sit above the voice pill, out of the crosshair's way. */
+  bottom: 92px;
   left: 50%;
   transform: translateX(-50%);
   color: #fff;
@@ -1145,6 +1146,9 @@ body.turning * {
   }
   .voice-controls {
     bottom: 24px;
+  }
+  .interact {
+    bottom: 82px;
   }
   .drawer {
     right: 20px;

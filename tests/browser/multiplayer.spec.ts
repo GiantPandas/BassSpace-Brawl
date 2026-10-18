@@ -191,7 +191,9 @@ test("Chrome pointer lock, Blender character, pickup, throw and crouch", async (
   await join(friend, code, "Clay");
   await controls(page);
   await page.evaluate(() => (window as any).__friendslop.input("KeyS", true));
-  await expect.poll(async () => (await state(page)).z).toBeGreaterThan(8);
+  // The Stage: back up a little on the slab. The satellite past the slab edge
+  // would drop the walker into the void.
+  await expect.poll(async () => (await state(page)).z).toBeGreaterThan(4.4);
   await page.evaluate(() => {
     (window as any).__friendslop.input("KeyS", false);
     (window as any).__friendslop.look(0.6, 0.05);
@@ -230,7 +232,7 @@ test("Chrome pointer lock, Blender character, pickup, throw and crouch", async (
     .toBeLessThan(0.65);
   await page.evaluate(() => (window as any).__friendslop.input("KeyW", false));
   // Aim at a real prop rather than a guessed angle; props settle where they like.
-  expect(await page.evaluate(() => (window as any).aimAtProp(2))).toBe(2);
+  expect(await page.evaluate(() => (window as any).aimAtProp(15))).toBe(15);
   await page.evaluate(() => (window as any).__friendslop.action());
   await expect.poll(async () => (await state(page)).held).toBeGreaterThan(0);
   const held = (await state(page)).held;
@@ -519,7 +521,7 @@ test("refined Blender wardrobe, articulated crouch and talking mouth", async ({
   expect(new Set(poses.colors).size).toBe(3);
 });
 
-test("automatic doors, a shove from a gun, and a ball that bounces", async ({
+test("a gun shove, then a bounce pad flings you at the perch", async ({
   page,
   context,
 }) => {
@@ -532,34 +534,13 @@ test("automatic doors, a shove from a gun, and a ball that bounces", async ({
   await controls(page);
   await controls(friend);
   await page.bringToFront();
-  // The hall's east wall is shut until the workshop doors notice someone.
-  await walkTo(page, 7, 0);
-  expect(
-    await page.evaluate(
-      () => (window as any).__friendslop.doors.find((d: any) => d.id === 1).open,
-    ),
-  ).toBe(false);
-  await walkTo(page, 12.5, 0);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as any).__friendslop.doors.find((d: any) => d.id === 1).open,
-      ),
-    )
-    .toBe(true);
-  await walkTo(page, 16.5, 0);
-  await walkTo(page, 18, -4);
-  expect((await state(page)).x).toBeGreaterThan(15);
-  // The gun on the workbench, and a friend to shove with it.
-  expect(await page.evaluate(() => (window as any).aimAtProp(9))).toBe(9);
+  // Both start on the stage; the gun rests at its spawn.
+  await walkTo(page, -3.5, -1.5);
+  await friend.evaluate(() => (window as any).walkTo(0, 2));
+  expect(await page.evaluate(() => (window as any).aimAtProp(4))).toBe(4);
   await page.evaluate(() => (window as any).__friendslop.action());
-  await expect.poll(async () => (await state(page)).held).toBe(9);
+  await expect.poll(async () => (await state(page)).held).toBe(4);
   await page.screenshot({ path: "test-results/gun.png" });
-  await friend.evaluate(() => (window as any).walkTo(7, 0));
-  await friend.evaluate(() => (window as any).walkTo(16.5, 0));
-  await friend.evaluate(() => (window as any).walkTo(26, 4));
-  await walkTo(page, 18, 4);
   const before = await state(friend);
   await page.evaluate(
     ([x, z]) => (window as any).aimAt(x, 1.5, z),
@@ -579,68 +560,21 @@ test("automatic doors, a shove from a gun, and a ball that bounces", async ({
   // Nobody dies here: they keep their slot, their name and their footing.
   expect((await state(friend)).y).toBeGreaterThan(0);
   await expect(page.locator("#player-count")).toHaveText("2 / 8");
+  // Drop the gun, then stand on the NE pad and ride it up toward the perch.
   await page.evaluate(() => (window as any).__friendslop.action());
   await expect.poll(async () => (await state(page)).held).toBe(0);
-  // A ball, thrown hard at the floor, comes back up.
-  await walkTo(page, 16.5, 0);
-  await walkTo(page, 11, 1.5);
-  await walkTo(page, 10, 2.4);
-  expect(await page.evaluate(() => (window as any).aimAtProp(7))).toBe(7);
-  await page.evaluate(() => (window as any).__friendslop.action());
-  await expect.poll(async () => (await state(page)).held).toBe(7);
-  const flight = await page.evaluate(async () => {
-    const d = (window as any).__friendslop,
-      heights: number[] = [];
-    d.look(d.state.yaw, 0.85);
-    await new Promise((r) => setTimeout(r, 200));
-    d.action(true);
-    const until = performance.now() + 2500;
+  await walkTo(page, 3.5, 3.5);
+  const launched = await page.evaluate(async () => {
+    const d = (window as any).__friendslop;
+    let maxY = d.state.y;
+    const until = performance.now() + 2000;
     while (performance.now() < until) {
-      heights.push(d.scene.props.get(7).position.y);
+      maxY = Math.max(maxY, d.state.y);
       await new Promise((r) => requestAnimationFrame(r));
     }
-    return heights;
+    return maxY;
   });
-  const floor = flight.findIndex((y) => y < 0.42);
-  expect(floor).toBeGreaterThan(-1);
-  expect(Math.max(...flight.slice(floor))).toBeGreaterThan(0.75);
-  expect(errors).toEqual([]);
-});
-test("a hand-worked door opens the yard and the world beyond it", async ({
-  page,
-}) => {
-  test.setTimeout(120000);
-  const errors: string[] = [];
-  page.on("pageerror", (e) => errors.push(e.message));
-  await create(page, "Wanderer");
-  await controls(page);
-  await walkTo(page, 3.25, -8.6);
-  await page.evaluate(() => (window as any).aimAt(3.25, 1.3, -10.65));
-  expect(
-    await page.evaluate(() =>
-      (window as any).__friendslop.sim.doorTarget(
-        (window as any).__friendslop.state,
-      ),
-    ),
-  ).toBeGreaterThan(0);
-  await expect(page.locator("#interact")).toContainText("The yard");
-  await walkTo(page, 3.25, -12);
-  expect((await state(page)).z).toBeGreaterThan(-11);
-  await page.evaluate(() => (window as any).__friendslop.action());
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as any).__friendslop.doors.find((d: any) => d.id === 3).open,
-      ),
-    )
-    .toBe(true);
-  await page.waitForTimeout(1100);
-  await walkTo(page, 3, -14);
-  await walkTo(page, 5, -18);
-  expect((await state(page)).z).toBeLessThan(-15);
-  await expect(page.locator("#zone-name")).toHaveText("The yard");
-  await page.screenshot({ path: "test-results/yard.png" });
+  expect(launched).toBeGreaterThan(1.5);
   expect(errors).toEqual([]);
 });
 test("teams modes split the lobby and wear their badges", async ({

@@ -12,8 +12,8 @@ import {
   PELLET_ID_BASE,
   type Character,
 } from "../shared/simulation";
-import { STEP, PALETTE, CHARACTER_PALETTE, WEAPON, MELEE, HORN, DOORS, WINDOWS, GRILL, propKind } from "../shared/level";
-import { CARDS, cardBit } from "../shared/upgrades";
+import { STEP, PALETTE, CHARACTER_PALETTE, WEAPON, MELEE, HORN, DOORS, WINDOWS, propKind } from "../shared/level";
+import { CARDS, cardBit, buildStats } from "../shared/upgrades";
 import {
   EMOTES,
   HATS,
@@ -38,13 +38,13 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 $("app").innerHTML = `<div id="world"></div><div id="shade" class="shade"></div>
 <header class="topbar"><button id="about-button" class="brand" aria-label="About BassSpace Brawl"><span class="brand-mark"><svg viewBox="0 0 192 192" aria-hidden="true"><rect x="17" y="17" width="158" height="158" rx="46" fill="#2b2545" transform="rotate(-11 96 96)"/><g stroke="#c9f24f" stroke-width="13" stroke-linecap="round" fill="none"><path d="M107.8 62.6A52 52 0 0 1 107.8 129.4"/><path d="M133.5 50.1A80 80 0 0 1 133.5 141.9"/></g><circle cx="68" cy="96" r="30" fill="#c9f24f"/><circle cx="68" cy="96" r="13" fill="#2b2545"/></svg></span><span class="brand-word">bassspace <b>brawl</b></span><small></small></button><div id="top-actions" class="top-actions"><span id="net-mode" class="pill net-mode" hidden><i class="dot"></i> <span id="net-mode-text"></span></span><button id="help-button" class="icon-button" aria-label="Controls and help">?</button></div></header>
-<main id="lobby" class="lobby"><div class="eyebrow">2–8 players · one shared house</div><h1><span class="line"><span>Turn the bass up.</span></span><span class="line"><span>Throw them <em>out.</em></span></span></h1><p class="intro">Shove guns, throwable furniture and upgrades that break every round.<br>Built with Three.js, Rapier physics, and proximity voice.</p><a class="github-button" href="https://github.com/larshurrelb/friendslop-base" target="_blank" rel="noopener noreferrer" aria-label="Get BassSpace Brawl on GitHub">Get it on GitHub <span class="github-arrow" aria-hidden="true">↗</span></a><form id="entry" class="entry-card"><label for="name">WHAT SHOULD WE CALL YOU?</label><div class="name-input"><div class="avatar-chip">✳</div><input id="name" aria-label="Your name" autocomplete="nickname" maxlength="20" placeholder="Your name" required value="Guest"></div><button class="primary" id="create" type="submit">Create a room <span>↗</span></button><div class="separator">or find your friends</div><div class="join-row"><input id="join-code" aria-label="Room code" placeholder="ROOM CODE" maxlength="6" autocomplete="off"><button id="join" type="button">Join →</button></div><div class="entry-note">No accounts. Just a room code.</div><p id="entry-error" class="error" hidden></p></form><div class="lobby-foot"><span>2–8 players</span><span>Proximity voice</span><span>Cards between rounds</span></div><p class="mobile-notice">A keyboard and mouse are required to play.</p></main>
-<footer id="footer" class="footer"><span>Every round makes the house worse.</span><span class="version">BASSSPACE BRAWL &nbsp; / &nbsp; v0.1</span></footer>
-<div id="hud" class="hud" hidden><div class="room-bar"><div><small>YOUR ROOM</small><span id="room-code" class="room-code">------</span></div><button id="copy-room" aria-label="Copy room invite">Copy invite ↗</button><span id="player-count" class="count">1 / 8</span><span id="match-timer" class="count"></span><span id="bucks" class="count" title="Bucks — win rounds to earn more">💰 0</span><select id="mode-select" aria-label="Game mode" hidden><option value="ffa">Free for all</option><option value="teams-2">Teams 2v2</option><option value="teams-3">Teams 3v3</option><option value="teams-4">Teams 4v4</option><option value="king">King of the Yard</option><option value="chaos">Chaos Mode</option></select><button id="ready-button">Ready up</button></div><div id="ammo" class="ammo" hidden></div><div id="crosshair" class="crosshair"></div><div id="hitflash" class="hitflash"></div><div id="interact" class="interact" hidden></div><div class="bottom-left"><span class="zone-icon">⌂</span><div><div id="zone-name" class="zone-name">The common room</div><div id="zone-desc" class="zone-desc">SMALL ROOM · SOFT REFLECTIONS</div></div></div><div class="voice-controls"><button id="enable-voice">Enable voice</button><button id="mute" hidden aria-label="Mute microphone">Mic on</button><select id="voice-mode" aria-label="Microphone mode"><option value="open">Open mic</option><option value="ptt">Push to talk</option></select><span id="speaking-light" class="speaking-light"></span></div><div class="bottom-right"><button id="locker-button">Locker <span>✦</span></button><button id="friends-button">Friends <span id="friend-number">1</span></button><button id="debug-button">Diagnostics <span>⌁</span></button></div><div id="pause" class="pause"><div class="eyebrow" style="justify-content:center">The yard is open</div><h2>Break something.</h2><p>Test the weapons and break the furniture.<br>Then ready up and start the brawl.</p><button id="resume" class="primary">Click to explore →</button><small>WASD to move · Mouse to look · Esc to pause</small></div><div id="countdown" class="countdown" hidden></div><div id="round-banner" class="banner" hidden></div><div id="build" class="build" hidden><div class="eyebrow">CHOOSE AN UPGRADE</div><div id="build-cards" class="build-cards"></div></div></div>
+<main id="lobby" class="lobby"><div class="eyebrow">2–8 players · one floating stage</div><h1><span class="line"><span>Turn the bass up.</span></span><span class="line"><span>Throw them <em>out.</em></span></span></h1><p class="intro">Shove guns, throwable furniture and upgrades that break every round.<br>Built with Three.js, Rapier physics, and proximity voice.</p><a class="github-button" href="https://github.com/larshurrelb/friendslop-base" target="_blank" rel="noopener noreferrer" aria-label="Get BassSpace Brawl on GitHub">Get it on GitHub <span class="github-arrow" aria-hidden="true">↗</span></a><form id="entry" class="entry-card"><label for="name">WHAT SHOULD WE CALL YOU?</label><div class="name-input"><div class="avatar-chip">✳</div><input id="name" aria-label="Your name" autocomplete="nickname" maxlength="20" placeholder="Your name" required value="Guest"></div><button class="primary" id="create" type="submit">Create a room <span>↗</span></button><div class="separator">or find your friends</div><div class="join-row"><input id="join-code" aria-label="Room code" placeholder="ROOM CODE" maxlength="6" autocomplete="off"><button id="join" type="button">Join →</button></div><div class="entry-note">No accounts. Just a room code.</div><p id="entry-error" class="error" hidden></p></form><div class="lobby-foot"><span>2–8 players</span><span>Proximity voice</span><span>Cards between rounds</span></div><p class="mobile-notice">A keyboard and mouse are required to play.</p></main>
+<footer id="footer" class="footer"><span>Every round makes the brawl worse.</span><span class="version">BASSSPACE BRAWL &nbsp; / &nbsp; v0.1</span></footer>
+<div id="hud" class="hud" hidden><div class="room-bar"><div><small>YOUR ROOM</small><span id="room-code" class="room-code">------</span></div><button id="copy-room" aria-label="Copy room invite">Copy invite ↗</button><span id="player-count" class="count">1 / 8</span><span id="match-timer" class="count"></span><span id="bucks" class="count" title="Bucks — win rounds to earn more">💰 0</span><select id="mode-select" aria-label="Game mode" hidden><option value="ffa">Free for all</option><option value="teams-2">Teams 2v2</option><option value="teams-3">Teams 3v3</option><option value="teams-4">Teams 4v4</option><option value="king">King of the Yard</option><option value="chaos">Chaos Mode</option></select><button id="ready-button">Ready up</button></div><div id="ammo" class="ammo" hidden></div><div id="crosshair" class="crosshair"></div><div id="hitflash" class="hitflash"></div><div id="interact" class="interact" hidden></div><div class="bottom-left"><span class="zone-icon">◈</span><div><div id="zone-name" class="zone-name">The stage</div><div id="zone-desc" class="zone-desc">CENTER RING · OPEN SKY</div></div></div><div class="voice-controls"><button id="enable-voice">Enable voice</button><button id="mute" hidden aria-label="Mute microphone">Mic on</button><select id="voice-mode" aria-label="Microphone mode"><option value="open">Open mic</option><option value="ptt">Push to talk</option></select><span id="speaking-light" class="speaking-light"></span></div><div class="bottom-right"><button id="locker-button">Locker <span>✦</span></button><button id="friends-button">Friends <span id="friend-number">1</span></button><button id="debug-button">Diagnostics <span>⌁</span></button></div><div id="pause" class="pause"><div class="eyebrow" style="justify-content:center">The stage is open</div><h2>Break something.</h2><p>Test the weapons and break the furniture.<br>Then ready up and start the brawl.</p><button id="resume" class="primary">Click to explore →</button><small>WASD to move · Mouse to look · Esc to pause</small></div><div id="countdown" class="countdown" hidden></div><div id="round-banner" class="banner" hidden></div><div id="build" class="build" hidden><div class="eyebrow">CHOOSE AN UPGRADE</div><div id="build-cards" class="build-cards"></div></div></div>
 <aside id="friends" class="drawer" hidden><button class="close" data-close="friends" aria-label="Close friends">×</button><h3>In good company</h3><div id="member-list"></div><button id="solo-tab" class="primary">Open a second player <span>↗</span></button><p class="debug-note">Test solo in another tab. Use headphones when testing microphones.</p><button id="leave" class="primary" style="background:transparent;color:#8f88ad;border-color:#cfcbdd">Leave room</button></aside>
 <aside id="debug" class="drawer" hidden><button class="close" data-close="debug" aria-label="Close diagnostics">×</button><h3>Under the hood</h3><div id="metrics" class="metrics"></div><div id="peer-debug"></div><p id="codec-status" class="debug-note"></p><p id="net-detail" class="debug-note"></p></aside>
-<aside id="help" class="drawer" hidden><button class="close" data-close="help" aria-label="Close help">×</button><h3>A little field guide</h3><div class="help-grid"><div><kbd class="key">W A S D</kbd></div><span>Move around</span><div><kbd class="key">Mouse</kbd></div><span>Look around</span><div><kbd class="key">Tab</kbd></div><span>First / third person</span><div><kbd class="key">Shift</kbd></div><span>Sprint</span><div><kbd class="key">Ctrl / C</kbd></div><span>Crouch</span><div><kbd class="key">Space</kbd></div><span>Jump</span><div><kbd class="key">E</kbd></div><span>Pick up / drop</span><div><kbd class="key">Q</kbd></div><span>Throw held object</span><div><kbd class="key">B</kbd></div><span>Air dash (with the card)</span><div><kbd class="key">1 – 4</kbd></div><span>Play a bound emote</span><div><kbd class="key">Click / F</kbd></div><span>Fire, swing or honk</span><div><kbd class="key">V</kbd></div><span>Push to talk</span><div><kbd class="key">M</kbd></div><span>Mute microphone</span><div><kbd class="key">Esc</kbd></div><span>Release mouse</span></div><p class="about-copy">Voices get quieter with distance. Walk into the hall to hear the room change.</p><p class="about-copy">Doors open with <b>E</b>; the workshop doors open by themselves. Hits drain health and launch you; the pool takes you out of the fight until it spits you back out, and the old grill is an extremely bad place to stand.</p></aside>
-<aside id="about" class="drawer" hidden><button class="close" data-close="about" aria-label="Close about">×</button><h3>A house with a temper.</h3><p class="about-copy">BassSpace Brawl is a 2–8 player physics arena brawler. Shove guns, throwable furniture, proximity voice and upgrade cards that make every round more broken than the last.</p><p class="debug-note">Three.js · Rapier · TypeScript<br>Original Blender characters & synthetic acoustics</p></aside>
+<aside id="help" class="drawer" hidden><button class="close" data-close="help" aria-label="Close help">×</button><h3>A little field guide</h3><div class="help-grid"><div><kbd class="key">W A S D</kbd></div><span>Move around</span><div><kbd class="key">Mouse</kbd></div><span>Look around</span><div><kbd class="key">Tab</kbd></div><span>First / third person</span><div><kbd class="key">Shift</kbd></div><span>Sprint</span><div><kbd class="key">Ctrl / C</kbd></div><span>Crouch</span><div><kbd class="key">Space</kbd></div><span>Jump</span><div><kbd class="key">E</kbd></div><span>Pick up / drop</span><div><kbd class="key">Q</kbd></div><span>Throw held object</span><div><kbd class="key">B</kbd></div><span>Air dash (with the card)</span><div><kbd class="key">1 – 4</kbd></div><span>Play a bound emote</span><div><kbd class="key">Click / F</kbd></div><span>Fire, swing or honk</span><div><kbd class="key">V</kbd></div><span>Push to talk</span><div><kbd class="key">M</kbd></div><span>Mute microphone</span><div><kbd class="key">Esc</kbd></div><span>Release mouse</span></div><p class="about-copy">Voices carry across the open sky; the void under the stage carries nothing back.</p><p class="about-copy">Bounce pads fling you onto the perches. Hits drain health and launch you — the edge of the stage and the void below finish the job.</p></aside>
+<aside id="about" class="drawer" hidden><button class="close" data-close="about" aria-label="Close about">×</button><h3>A stage with a temper.</h3><p class="about-copy">BassSpace Brawl is a 2–8 player physics arena brawler. Shove guns, throwable furniture, proximity voice and upgrade cards that make every round more broken than the last.</p><p class="debug-note">Three.js · Rapier · TypeScript<br>Original Blender characters & synthetic acoustics</p></aside>
 <aside id="locker" class="drawer" hidden><button class="close" data-close="locker" aria-label="Close locker">×</button><h3>The Locker</h3><p class="debug-note">Cosmetics only — nothing here hits harder. Win rounds to earn 💰.</p><div id="shop-skins" class="shop-section"><h4>Skins</h4></div><div id="shop-hats" class="shop-section"><h4>Hats</h4></div><div id="shop-emotes" class="shop-section"><h4>Emotes <small>(keys 1–4)</small></h4></div><div id="shop-voice" class="shop-section"><h4>Voice</h4></div></aside><div id="toast" class="toast" hidden></div><div id="loading" class="loading">Warming up the bass…</div>`;
 const scene = new GameScene($("world"));
 let sim: Simulation | undefined,
@@ -75,8 +75,6 @@ let yaw = 0,
   latestTick = 0,
   lastStagger = 0,
   shake = 0;
-let mower: { x: number; z: number } | null = null,
-  lastChug = 0;
 let members: {
   id: number;
   color: number;
@@ -147,7 +145,9 @@ const keys = new Set<string>(),
 const offset = new THREE.Vector3();
 let noticeTimer: ReturnType<typeof setTimeout>,
   hitTimer: ReturnType<typeof setTimeout>,
-  lastUse = 0;
+  lastUse = 0,
+  // Client mirror of the authority's reload gate, for trigger sound only.
+  reloadUntil = 0;
 function toast(message: string) {
   $("toast").textContent = message;
   $("toast").hidden = false;
@@ -411,17 +411,8 @@ async function connect() {
         if (m.kind === "honk" && m.object) scene.useProp(m.object, "horn");
       }
       if (m.type === "shot") {
-        // Our own shot was drawn the moment we pulled the trigger.
-        if (m.id !== id) {
-          const dirs = m.dirs ?? [{ dx: m.dx, dy: m.dy, dz: m.dz }];
-          for (const dir of dirs) {
-            scene.tracer(
-              { ...m, dx: dir.dx, dy: dir.dy, dz: dir.dz },
-              scene.muzzle(m.object),
-            );
-          }
-          voice.spatial?.effect(m, "shoot");
-        }
+        // The pellet itself rides the snapshot; a shove gun draws no tracer.
+        if (m.id !== id) voice.spatial?.effect(m, "shoot");
         if (m.hit) {
           const struck =
             m.hit === id
@@ -479,18 +470,6 @@ async function connect() {
             "glass",
           );
         }
-      }
-      if (m.type === "grill") {
-        scene.grillBoom();
-        voice.spatial?.effect(
-          { x: GRILL.x, y: 0.95, z: GRILL.z },
-          "boom",
-        );
-      }
-      if (m.type === "mower") {
-        // The shove rides the next snapshot; this is where it is heading.
-        mower = { x: m.x, z: m.z };
-        scene.updateMower(m.x, m.z);
       }
       if (m.type === "explosion") {
         scene.boomAt(m.x, m.y, m.z);
@@ -675,35 +654,17 @@ function fire() {
     return;
   }
   const s = local.state,
-    eye = sim.eye(s),
-    d0 = sim.direction(s),
-    distance = sim.reach(s),
     muzzle = scene.muzzle(held) ?? sim.muzzle(s);
-  if (local.state.ammo > 0) {
+  // The shove gun shows only the live pellet, which rides the snapshots;
+  // scene.tracer is kept in the effects kit for a future laser weapon.
+  if (local.state.ammo > 0 && performance.now() >= reloadUntil) {
     local.state.ammo--;
     scene.pelletGhost(muzzle);
+    voice.spatial?.effect(muzzle, "shoot");
+  } else {
+    // Empty or mid-reload: a metallic click instead of the report.
+    voice.spatial?.effect(muzzle, "clack");
   }
-  const dirs = !!(local.state.build & cardBit("triple-shot"))
-    ? sim.spreadDirs(d0)
-    : [d0];
-  for (const d of dirs) {
-    const end = new THREE.Vector3(
-      eye.x + d.x * distance,
-      eye.y + d.y * distance,
-      eye.z + d.z * distance,
-    );
-    const origin = new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z);
-    const direction = end.clone().sub(origin).normalize();
-    scene.tracer({
-      ...muzzle,
-      dx: direction.x,
-      dy: direction.y,
-      dz: direction.z,
-      distance: end.distanceTo(origin),
-      hit: 0,
-    });
-  }
-  voice.spatial?.effect(muzzle, "shoot");
 }
 $("entry").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -869,8 +830,11 @@ addEventListener("keydown", (e) => {
   if (!e.repeat && e.code === "KeyE") interact();
   if (!e.repeat && e.code === "KeyQ") interact(true);
   if (!e.repeat && e.code === "KeyF") fire();
-  if (!e.repeat && e.code === "KeyR")
+  if (!e.repeat && e.code === "KeyR") {
     send({ type: "action", request: ++action, action: "reload" });
+    reloadUntil =
+      performance.now() + buildStats(local?.state.build ?? 0).reloadTicks * STEP * 1000;
+  }
   // Emotes ride Digit1..4, bound to whatever is equipped in the locker.
   if (!e.repeat && e.code.startsWith("Digit")) {
     const emoteId = locker.equipped.emotes[Number(e.code.slice(5)) - 1];
@@ -1065,23 +1029,12 @@ function applyVoiceFx(pid: number, c: Cosmetics) {
   if (fx) voice.setFx(pid, fx.rate, fx.radio);
   else voice.setFx(pid);
 }
-/** Where you are, in the words the HUD uses. Mirrors the acoustics regions. */
+/** Where you are, in the words the HUD uses. Mirrors the arena layout. */
 function zone(s: { x: number; y: number; z: number }): [string, string] {
-  if (s.z > 11) return ["The patio", "SUNNY · LOW FENCES"];
-  if (s.z < -11)
-    return s.x < -6.9 && s.z < -19.9
-      ? ["The shed", "TIGHT AND DUSTY"]
-      : ["The yard", "OUTDOORS · OPEN SKY"];
-  if (s.x > 14)
-    return s.x > 24 && s.z < -2
-      ? ["The back room", "STORES · KEEP IT TIDY"]
-      : ["The workshop", "BIG ROOM · HARD SURFACES"];
-  if (s.x > 5)
-    return s.y > 2.4
-      ? ["The mezzanine", "ABOVE THE HALL · MIND THE EDGE"]
-      : ["The hall", "LARGE HALL · LONG REFLECTIONS"];
-  if (s.x > 1 && s.z > 4) return ["The kitchen", "HOT ROOM · WATCH THE STOVE"];
-  return ["The common room", "SMALL ROOM · SOFT REFLECTIONS"];
+  const m = Math.max(Math.abs(s.x), Math.abs(s.z));
+  if (s.y > 2.4) return ["The perches", "UP HIGH · NO HANDHOLDING"];
+  if (m >= 7) return ["The satellites", "OUT ON A LIMB · MIND THE EDGE"];
+  return ["The stage", "CENTER RING · OPEN SKY"];
 }
 let debugTime = 0;
 function debug(now: number) {
@@ -1387,18 +1340,6 @@ function frame(now: number) {
       cameraMode === "third" ? cameraYaw : yaw,
       cameraMode === "third" ? cameraPitch : pitch,
     );
-    // The mower's engine gets louder as it closes in.
-    if (mower && now - lastChug > 340) {
-      const d = Math.hypot(s.x - mower.x, s.z - mower.z);
-      if (d < 12) {
-        voice.spatial?.effect(
-          { x: mower.x, y: 0.6, z: mower.z },
-          "chug",
-          Math.max(0.2, 1 - d / 14),
-        );
-        lastChug = now;
-      }
-    }
     updateMatchUI();
   } else {
     acc = 0;

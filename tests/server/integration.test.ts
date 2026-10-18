@@ -9,7 +9,7 @@ import {
   encodeInputs,
   type Input,
 } from "../../src/shared/protocol.js";
-import { PROPS } from "../../src/shared/level.js";
+import { PROPS, SPAWNS } from "../../src/shared/level.js";
 let server: http.Server,
   app: Awaited<ReturnType<typeof attachApplication>>,
   url: string;
@@ -231,7 +231,8 @@ test("the server decides every shot, and the whole room hears it", async () => {
   assert.equal((await empty).accepted, false, "an empty hand fires nothing");
   // Lay a gun on open floor and stand both players either side of it.
   const gun = PROPS.findIndex((p) => p.kind === "gun") + 1;
-  room.sim.props.get(gun)!.setTranslation({ x: 3.5, y: 0.5, z: 1.5 }, true);
+  // Away from the bounce pads: standing on one would slide the shooter off.
+  room.sim.props.get(gun)!.setTranslation({ x: 0, y: 0.5, z: 1.5 }, true);
   await new Promise((r) => setTimeout(r, 250));
   const rest = room.sim.props.get(gun)!.translation();
   const shooter = room.sim.players.get(a.welcome.id)!,
@@ -301,32 +302,6 @@ test("the server decides every shot, and the whole room hears it", async () => {
   a.ws.send(JSON.stringify({ type: "action", request: 5, action: "honk" }));
   assert.equal((await honked).object, horn);
 });
-test("doors are opened by the authority: on request, or by walking up", async () => {
-  const a = await member(),
-    b = await member(a.welcome.code);
-  const room = app.rooms.get(a.welcome.code)!;
-  const refused = wait(
-    a.ws,
-    (m) => m.type === "action-result" && m.request === 7,
-  );
-  a.ws.send(
-    JSON.stringify({ type: "action", request: 7, action: "door", object: 3 }),
-  );
-  assert.equal((await refused).accepted, false, "not from across the room");
-  const c = room.sim.players.get(a.welcome.id)!;
-  room.sim.restore(c, { ...c.state, x: 3.25, y: 0.87, z: -10.2 });
-  aim(a.ws, 1, 0, 0);
-  await new Promise((r) => setTimeout(r, 200));
-  const opened = wait(b.ws, (m) => m.type === "door" && m.id === 3);
-  a.ws.send(
-    JSON.stringify({ type: "action", request: 8, action: "door", object: 3 }),
-  );
-  assert.equal((await opened).open, true);
-  // The workshop doors watch for company instead of waiting to be asked.
-  const automatic = wait(b.ws, (m) => m.type === "door" && m.id === 1);
-  room.sim.restore(c, { ...c.state, x: 12, y: 0.87, z: 0 });
-  assert.equal((await automatic).open, true);
-});
 test("mode proposals are lobby-only and ride the match broadcast", async () => {
   const a = await member(),
     code = a.welcome.code,
@@ -335,6 +310,21 @@ test("mode proposals are lobby-only and ride the match broadcast", async () => {
   a.ws.send(JSON.stringify({ type: "mode", mode: "teams-2" }));
   assert.equal((await probe).phase, "lobby");
   assert.equal(app.rooms.get(code)!.mode, "teams-2");
+});
+test("a fall through the stage while the lobby waits is not an elimination", async () => {
+  const a = await member();
+  const room = app.rooms.get(a.welcome.code)!;
+  const player = room.sim.players.get(a.welcome.id)!;
+  // Drop them under the world: the motor runs every tick and flags the fall,
+  // so the lobby machine has to catch it and put them back on their spawn.
+  room.sim.restore(player, { ...player.state, x: 0, y: -30, z: 0 });
+  for (let i = 0; i < 60 && player.state.y < 0; i++)
+    await new Promise((r) => setTimeout(r, 50));
+  const spawn = SPAWNS[(a.welcome.id - 1) % SPAWNS.length];
+  assert.equal(player.state.x, spawn[0]);
+  assert.ok(Math.abs(player.state.y - spawn[1]) < 0.5, "back on top of the slab");
+  assert.equal(player.state.z, spawn[2]);
+  assert.equal(player.state.out, 0, "still in, waiting for the ready gate");
 });
 test("teams modes split the lobby and share every victory", async () => {
   const a = await member(),
