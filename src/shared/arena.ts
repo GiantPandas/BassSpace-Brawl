@@ -238,8 +238,16 @@ export const buildArena = (seed: string): ArenaLayout => {
       hd = flat ? 0.22 : len / 2;
     const x = n.cx + (r() * 2 - 1) * Math.max(0, n.hw - hw - 1),
       z = n.cz + (r() * 2 - 1) * Math.max(0, n.hd - hd - 1);
+    // Clearance is measured from the wall's EDGE, not its centre: a long wall
+    // may pass close to a spawn while its centre stays 1.6 m away.
+    const edgeOfSpawn = (hw: number, hd: number) =>
+      spawns.some((s) => {
+        const ox = Math.max(Math.abs(s[0] - x) - hw, 0),
+          oz = Math.max(Math.abs(s[2] - z) - hd, 0);
+        return ox * ox + oz * oz < 1.6 * 1.6;
+      });
     if (
-      nearSpawn(x, z) ||
+      edgeOfSpawn(hw, hd) ||
       nearPad(x, z) ||
       Math.hypot(x, z) < 2.6 ||
       boxes.some(
@@ -301,6 +309,15 @@ export const buildArena = (seed: string): ArenaLayout => {
             b.kind === "wall" &&
             Math.abs(b.p[0] - x) < b.s[0] / 2 + 0.9 &&
             Math.abs(b.p[2] - z) < b.s[2] / 2 + 0.9,
+        ) ||
+        // Never wedged into a platform that overlaps this one from above:
+        // the prop's body needs the full column above its resting spot clear.
+        boxes.some(
+          (b) =>
+            b.p[1] + b.s[1] / 2 > n.top + 0.05 &&
+            b.p[1] - b.s[1] / 2 < n.top + 1.2 &&
+            Math.abs(b.p[0] - x) < b.s[0] / 2 + 0.5 &&
+            Math.abs(b.p[2] - z) < b.s[2] / 2 + 0.5,
         )
       )
         continue;

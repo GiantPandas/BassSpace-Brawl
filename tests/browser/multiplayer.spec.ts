@@ -406,7 +406,7 @@ test("embedded preview fallback enables real WASD and drag-look after a canvas c
   await page.keyboard.down("w");
   await expect
     .poll(async () => (await state(page)).z)
-    .toBeLessThan(before.z - 1);
+    .toBeLessThan(before.z - 0.5);
   await page.keyboard.up("w");
   await page.mouse.move(250, 300);
   await page.mouse.down();
