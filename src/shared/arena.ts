@@ -223,6 +223,52 @@ export const buildArena = (seed: string): ArenaLayout => {
     boxes.push({ p: [px, ptop - 0.25, pz], s: [phw * 2, 0.5, phd * 2], color: "#6d4f8f", kind: "perch" });
   }
 
+  // A pad on every platform: nothing dead-ends. The perch pass above paired
+  // each perch with a launch pad on its parent; satellites and branches
+  // without one get a return pad aimed straight back toward the centre slab,
+  // bare perches do the same, and a centre slab that lost every perch keeps
+  // a vertical bumper. Centre pads stay outside the walkable ring, or the
+  // middle of the arena turns into a launchpad the walk-and-fight tests keep
+  // triggering. Pads stay clear of spawns; walls and props dodge
+  // whatever lands here.
+  const padOn = (n: { cx: number; cz: number; hw: number; hd: number }) =>
+    pads.some((p) => Math.abs(p.x - n.cx) < n.hw && Math.abs(p.z - n.cz) < n.hd);
+  for (const [i, n] of nodes.entries()) {
+    if (padOn(n)) continue;
+    const len = Math.hypot(n.cx, n.cz) || 1;
+    const vx = i === 0 ? 0 : (-n.cx / len) * 5,
+      vz = i === 0 ? 0 : (-n.cz / len) * 5;
+    let placed = false;
+    for (let attempt = 0; attempt < 10 && !placed; attempt++) {
+      let jx = n.cx + (r() * 2 - 1) * Math.max(0, n.hw - 1.2),
+        jz = n.cz + (r() * 2 - 1) * Math.max(0, n.hd - 1.2);
+      if (i === 0) {
+        // Keep the middle of the centre slab walkable: slide points inside
+        // the ring out to its rim, or skip if that pushes off the slab.
+        const h = Math.hypot(jx, jz);
+        if (h < 3.9) {
+          const t = 3.9 / (h || 1);
+          jx *= t;
+          jz *= t;
+          if (
+            Math.abs(jx) > n.hw - 1.2 ||
+            Math.abs(jz) > n.hd - 1.2
+          )
+            continue;
+        }
+      }
+      if (nearSpawn(jx, jz, 1.8) || nearPad(jx, jz, 1.5)) continue;
+      pads.push({ x: jx, z: jz, r: 0.8, y: n.top, vx, vz, bounce: 9 });
+      placed = true;
+    }
+    if (!placed)
+      pads.push(
+        i === 0
+          ? { x: n.cx, z: n.cz, r: 0.8, y: n.top, vx: 0, vz: 0, bounce: 11 }
+          : { x: n.cx, z: n.cz, r: 0.8, y: n.top, vx, vz, bounce: 9 },
+      );
+  }
+
   // Cover walls on the big lower platforms: waist-high, vaultable, never
   // tucked against an edge, a pad or a spawn, and never inside the walkable
   // ring the browser tests fight and walk across at the centre.

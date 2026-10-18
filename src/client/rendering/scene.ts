@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
-import { CHARACTER_PALETTE, PALETTE, type PropKind, type Vec3 } from "../../shared/level";
+import { CHARACTER_PALETTE, PALETTE, type Box, type PropKind, type Vec3 } from "../../shared/level";
 import { DEFAULT_ARENA, type ArenaLayout } from "../../shared/arena";
 import { PELLET_ID_BASE, type DoorState, type WindowState } from "../../shared/simulation";
 import { cardBit } from "../../shared/upgrades";
@@ -230,24 +230,66 @@ export class GameScene {
     const group = this.arenaGroup = new THREE.Group();
     this.scene.add(group);
     for (const b of arena.level) {
-      const mesh = this.box(b.p, b.s, b.color);
-      if (b.hide) this.front.push(mesh);
+      // Pad mats are replaced by the full spring render below, which sits
+      // over the same trigger. Cover walls stay plain boxes; every other
+      // slab gets the platform treatment.
+      if (b.kind === "pad") continue;
+      const node = b.kind === "wall" ? this.box(b.p, b.s, b.color) : this.platform(b);
+      if (b.hide) this.front.push(node);
     }
-    // Bounce pads get a visible spring on each mat; the mat itself is a
-    // LEVEL box. Generated arenas lift mats off the void with an explicit y.
+    // Every bounce pad renders as a full spring: a rubber base sunk flush
+    // into the deck, brass coils, a launch plate and a chevron aimed down
+    // the launch vector. Pads are triggers, so none of this collides.
     for (const pad of arena.pads) {
-      const coil = new THREE.Mesh(
-        new THREE.TorusGeometry(pad.r * 0.6, 0.05, 10, 28),
-        new THREE.MeshStandardMaterial({
-          color: "#a89443",
-          roughness: 0.35,
-          metalness: 0.6,
-        }),
+      const y = pad.y ?? 0;
+      const rubber = new THREE.MeshStandardMaterial({ color: "#43403a", roughness: 0.9 });
+      const brass = new THREE.MeshStandardMaterial({ color: "#a89443", roughness: 0.35, metalness: 0.6 });
+      const spring = new THREE.Group();
+      const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(pad.r + 0.04, pad.r + 0.09, 0.07, 24),
+        rubber,
       );
-      coil.rotation.x = Math.PI / 2;
-      coil.position.set(pad.x, (pad.y ?? 0) + 0.12, pad.z);
-      coil.castShadow = true;
-      group.add(coil);
+      base.position.set(pad.x, y - 0.025, pad.z);
+      base.receiveShadow = true;
+      spring.add(base);
+      for (const cy of [0.08, 0.17] as const) {
+        const coil = new THREE.Mesh(
+          new THREE.TorusGeometry(pad.r * 0.76, 0.05, 10, 28),
+          brass,
+        );
+        coil.rotation.x = Math.PI / 2;
+        coil.position.set(pad.x, y + cy, pad.z);
+        coil.castShadow = true;
+        spring.add(coil);
+      }
+      const plate = new THREE.Mesh(
+        new THREE.CylinderGeometry(pad.r * 0.72, pad.r * 0.66, 0.06, 28),
+        new THREE.MeshStandardMaterial({ color: "#d3c170", roughness: 0.55 }),
+      );
+      plate.position.set(pad.x, y + 0.245, pad.z);
+      plate.castShadow = true;
+      spring.add(plate);
+      const speed = Math.hypot(pad.vx, pad.vz);
+      if (speed > 0.01) {
+        const chevron = new THREE.Group();
+        chevron.position.set(
+          pad.x + (pad.vx / speed) * pad.r * 0.45,
+          y + 0.28,
+          pad.z + (pad.vz / speed) * pad.r * 0.45,
+        );
+        chevron.rotation.y = Math.atan2(pad.vx, pad.vz);
+        for (const s of [-1, 1] as const) {
+          const wing = new THREE.Mesh(
+            new THREE.BoxGeometry(0.3, 0.018, 0.05),
+            new THREE.MeshStandardMaterial({ color: "#241f1a", roughness: 0.7 }),
+          );
+          wing.rotation.y = s * 0.85;
+          wing.position.set(s * 0.09, 0, 0.05);
+          chevron.add(wing);
+        }
+        spring.add(chevron);
+      }
+      group.add(spring);
     }
     arena.props.forEach((prop, i) => {
       const root = this.makeProp(i);
@@ -337,6 +379,79 @@ export class GameScene {
     (this.arenaGroup ?? this.scene).add(m);
     return m;
   }
+  /**
+   * The platform treatment: an inset deck slab under steel edge trim with
+   * corner posts, a lit safety strip inside the rim, plank seams across the
+   * deck and a support column braced under the lip. Pure presentation — the
+   * LEVEL box behind it stays the exact collider.
+   */
+  platform(b: Box) {
+    const [px, py, pz] = b.p,
+      [sx, sy, sz] = b.s;
+    const top = py + sy / 2;
+    const g = new THREE.Group();
+    const deck = new THREE.Mesh(
+      new THREE.BoxGeometry(sx - 0.12, sy - 0.02, sz - 0.12),
+      new THREE.MeshStandardMaterial({ color: b.color, roughness: 0.85 }),
+    );
+    deck.position.set(px, py, pz);
+    deck.castShadow = true;
+    deck.receiveShadow = true;
+    g.add(deck);
+    const steel = new THREE.MeshStandardMaterial({ color: "#5b656f", roughness: 0.5, metalness: 0.35 });
+    const glow = b.kind === "stage" ? "#a5c666" : b.kind === "perch" ? "#b18ad3" : "#e6cf95";
+    const strip = new THREE.MeshStandardMaterial({ color: glow, emissive: glow, emissiveIntensity: 1.2, roughness: 0.6 });
+    for (const s of [-1, 1] as const) {
+      const railX = new THREE.Mesh(new THREE.BoxGeometry(sx, 0.12, 0.135), steel);
+      railX.position.set(px, top - 0.05, pz + s * (sz / 2 - 0.068));
+      railX.castShadow = true;
+      g.add(railX);
+      const railZ = new THREE.Mesh(new THREE.BoxGeometry(0.135, 0.12, sz), steel);
+      railZ.position.set(px + s * (sx / 2 - 0.068), top - 0.05, pz);
+      railZ.castShadow = true;
+      g.add(railZ);
+      const lineX = new THREE.Mesh(new THREE.BoxGeometry(sx - 0.24, 0.02, 0.045), strip);
+      lineX.position.set(px, top + 0.005, pz + s * (sz / 2 - 0.15));
+      g.add(lineX);
+      const lineZ = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.02, sz - 0.24), strip);
+      lineZ.position.set(px + s * (sx / 2 - 0.15), top + 0.005, pz);
+      g.add(lineZ);
+    }
+    for (const [ax, az] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.11, sy + 0.1, 0.11), steel);
+      post.position.set(px + ax * (sx / 2 - 0.055), py + 0.05, pz + az * (sz / 2 - 0.055));
+      post.castShadow = true;
+      g.add(post);
+    }
+    const seamMat = new THREE.MeshStandardMaterial({ color: "#20262c", roughness: 0.7 });
+    const seamsX = Math.floor((sx - 0.6) / 2.4);
+    for (let i = 1; i <= seamsX; i++) {
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.012, sz - 0.32), seamMat);
+      seam.position.set(px + (i - (seamsX + 1) / 2) * (sx / (seamsX + 1)), top + 0.004, pz);
+      g.add(seam);
+    }
+    const seamsZ = Math.floor((sz - 0.6) / 2.4);
+    for (let i = 1; i <= seamsZ; i++) {
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(sx - 0.32, 0.012, 0.014), seamMat);
+      seam.position.set(px, top + 0.004, pz + (i - (seamsZ + 1) / 2) * (sz / (seamsZ + 1)));
+      g.add(seam);
+    }
+    const column = new THREE.Mesh(
+      new THREE.BoxGeometry(Math.max(0.4, sx * 0.26), 1.15, Math.max(0.4, sz * 0.26)),
+      steel,
+    );
+    column.position.set(px, py - sy / 2 - 0.55, pz);
+    column.castShadow = true;
+    g.add(column);
+    for (const [wx, wz] of [[sx * 0.6, 0.11], [0.11, sz * 0.6]] as const) {
+      const brace = new THREE.Mesh(new THREE.BoxGeometry(wx, 0.11, wz), steel);
+      brace.position.set(px, py - sy / 2 - 0.11, pz);
+      brace.castShadow = true;
+      g.add(brace);
+    }
+    (this.arenaGroup ?? this.scene).add(g);
+    return g;
+  }
   /** A practical fixture's warm pool of light. Kept shadowless to stay cheap on 8-player GPUs. */
   roomLight(p: [number, number, number], intensity: number, distance: number) {
     const light = new THREE.PointLight("#ffe4ad", intensity, distance, 2);
@@ -409,10 +524,10 @@ export class GameScene {
       kind = this.arena.props[i].kind;
     if (kind === "ball") {
       const ball = new THREE.Mesh(
-        new THREE.SphereGeometry(0.3, 24, 16),
+        new THREE.SphereGeometry(0.3, 32, 24),
         new THREE.MeshStandardMaterial({
           color: PALETTE[i % 8],
-          roughness: 0.45,
+          roughness: 0.42,
         }),
       );
       ball.castShadow = true;
@@ -420,13 +535,19 @@ export class GameScene {
       root.add(ball);
       for (const axis of [0, 1]) {
         const seam = new THREE.Mesh(
-          new THREE.TorusGeometry(0.301, 0.022, 8, 32),
-          new THREE.MeshStandardMaterial({ color: "#f4ecd8", roughness: 0.6 }),
+          new THREE.TorusGeometry(0.301, 0.016, 10, 48),
+          new THREE.MeshStandardMaterial({ color: "#f4ecd8", roughness: 0.55 }),
         );
         if (axis === 0) seam.rotation.x = Math.PI / 2;
         else seam.rotation.y = Math.PI / 2;
         root.add(seam);
       }
+      const valve = new THREE.Mesh(
+        new THREE.SphereGeometry(0.034, 12, 8),
+        new THREE.MeshStandardMaterial({ color: "#2e2a26", roughness: 0.5 }),
+      );
+      valve.position.set(0, 0.29, 0.05);
+      root.add(valve);
       return root;
     }
     if (kind === "gun") {
@@ -468,6 +589,31 @@ export class GameScene {
       );
       sight.position.set(0, 0.11, -0.02);
       root.add(barrel, grip, sight);
+      const brake = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.055, 0.055, 0.06, 10),
+        new THREE.MeshStandardMaterial({ color: "#2b3238", roughness: 0.35, metalness: 0.6 }),
+      );
+      brake.rotation.x = Math.PI / 2;
+      brake.position.set(0, 0.02, -0.62);
+      brake.castShadow = true;
+      const pump = new THREE.Mesh(
+        new THREE.BoxGeometry(0.09, 0.05, 0.18),
+        new THREE.MeshStandardMaterial({ color: "#6b5137", roughness: 0.8 }),
+      );
+      pump.position.set(0, -0.09, -0.3);
+      pump.castShadow = true;
+      const mag = new THREE.Mesh(
+        new THREE.BoxGeometry(0.07, 0.12, 0.09),
+        new THREE.MeshStandardMaterial({ color: "#3b2b22", roughness: 0.8 }),
+      );
+      mag.position.set(0, -0.16, 0.0);
+      mag.castShadow = true;
+      const notch = new THREE.Mesh(
+        new THREE.BoxGeometry(0.055, 0.035, 0.03),
+        new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.6 }),
+      );
+      notch.position.set(0, 0.11, 0.24);
+      root.add(brake, pump, mag, notch);
       return root;
     }
     if (kind === "bat") {
@@ -490,6 +636,28 @@ export class GameScene {
       grip.rotation.x = Math.PI / 2;
       grip.position.z = 0.43;
       root.add(grip);
+      const bandMat = new THREE.MeshStandardMaterial({ color: "#ece0bc", roughness: 0.7 });
+      const band = new THREE.Mesh(
+        new THREE.TorusGeometry(0.087, 0.011, 8, 20),
+        bandMat,
+      );
+      band.rotation.x = Math.PI / 2;
+      band.position.z = -0.5;
+      root.add(band);
+      for (const gz of [0.34, 0.44, 0.54] as const) {
+        const wrap = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.008, 8, 16), bandMat);
+        wrap.rotation.x = Math.PI / 2;
+        wrap.position.z = gz;
+        root.add(wrap);
+      }
+      const knob = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.058, 0.05, 0.05, 12),
+        new THREE.MeshStandardMaterial({ color: "#3b2b22", roughness: 0.9 }),
+      );
+      knob.rotation.x = Math.PI / 2;
+      knob.position.z = 0.615;
+      knob.castShadow = true;
+      root.add(knob);
       return root;
     }
     if (kind === "horn") {
@@ -515,6 +683,18 @@ export class GameScene {
       bulb.scale.z = 1.25;
       bulb.position.z = 0.38;
       root.add(bulb);
+      const brass = new THREE.MeshStandardMaterial({ color: "#d8a928", roughness: 0.3, metalness: 0.65 });
+      const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.202, 0.012, 8, 24), brass);
+      mouth.rotation.x = Math.PI / 2;
+      mouth.position.z = -0.25;
+      root.add(mouth);
+      const piece = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.05, 0.06, 12),
+        brass,
+      );
+      piece.rotation.x = Math.PI / 2;
+      piece.position.z = 0.585;
+      root.add(piece);
       return root;
     }
     if (kind === "chair") {
@@ -527,13 +707,20 @@ export class GameScene {
       seat.castShadow = true;
       seat.receiveShadow = true;
       root.add(seat);
-      const back = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.45, 0.09), wood);
-      back.position.set(0, 0.225, -0.205);
-      back.castShadow = true;
-      root.add(back);
+      for (const [ry, rh] of [[0.15, 0.06], [0.32, 0.06]] as const) {
+        const slat = new THREE.Mesh(new THREE.BoxGeometry(0.5, rh, 0.05), wood);
+        slat.position.set(0, ry, -0.19);
+        slat.castShadow = true;
+        root.add(slat);
+      }
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.07, 0.07), tint);
+      rail.position.set(0, 0.415, -0.19);
+      rail.castShadow = true;
+      root.add(rail);
       for (const [lx, lz] of [[-0.22, -0.18], [0.22, -0.18], [-0.22, 0.18], [0.22, 0.18]] as const) {
-        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.35, 0.07), wood);
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.038, 0.35, 10), wood);
         leg.position.set(lx, -0.275, lz);
+        leg.castShadow = true;
         root.add(leg);
       }
       return root;
@@ -548,6 +735,18 @@ export class GameScene {
       root.add(top);
       // Legs run from the collider bottom (-0.38, the floor at rest) up to the
       // top's underside (+0.30), so nothing floats in the gap.
+      const inlay = new THREE.Mesh(
+        new THREE.BoxGeometry(0.76, 0.02, 0.76),
+        new THREE.MeshStandardMaterial({ color: "#3b2b22", roughness: 0.9 }),
+      );
+      inlay.position.y = 0.385;
+      root.add(inlay);
+      for (const [w, d, x, z] of [[0.72, 0.06, 0, 0.31], [0.72, 0.06, 0, -0.31], [0.06, 0.72, 0.31, 0], [0.06, 0.72, -0.31, 0]] as const) {
+        const apron = new THREE.Mesh(new THREE.BoxGeometry(w, 0.1, d), wood);
+        apron.position.set(x, 0.24, z);
+        apron.castShadow = true;
+        root.add(apron);
+      }
       for (const [lx, lz] of [[-0.34, -0.34], [0.34, -0.34], [-0.34, 0.34], [0.34, 0.34]] as const) {
         const leg = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.68, 0.09), wood);
         leg.position.set(lx, -0.04, lz);
@@ -562,23 +761,44 @@ export class GameScene {
       body.position.y = -0.05;
       body.castShadow = true;
       root.add(body);
-      const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.215, 0.215, 0.07, 12, 1, true), new THREE.MeshStandardMaterial({ color: "#4a4f48", roughness: 0.6, side: THREE.DoubleSide }));
-      rim.position.y = 0.185;
+      const steel = new THREE.MeshStandardMaterial({ color: "#8a8f96", roughness: 0.35, metalness: 0.5 });
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.208, 0.02, 10, 24), steel);
+      rim.rotation.x = Math.PI / 2;
+      rim.position.y = 0.19;
       root.add(rim);
+      const dark = new THREE.MeshStandardMaterial({ color: "#4a4f48", roughness: 0.6 });
+      for (const ry of [-0.16, 0.04] as const) {
+        const rib = new THREE.Mesh(new THREE.CylinderGeometry(0.204, 0.19, 0.03, 12), dark);
+        rib.position.y = ry;
+        root.add(rib);
+      }
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.03, 12), dark);
+      base.position.y = -0.28;
+      root.add(base);
       return root;
     }
     if (kind === "bottle") {
       const tint = new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.3 });
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.34, 10), tint);
-      body.position.y = -0.07;
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.3, 12), tint);
+      body.position.y = -0.1;
       body.castShadow = true;
       root.add(body);
-      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.055, 0.16, 10), new THREE.MeshStandardMaterial({ color: "#e8f2ee", roughness: 0.3 }));
-      neck.position.y = 0.14;
+      const shoulder = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.085, 0.1, 12), tint);
+      shoulder.position.y = 0.1;
+      root.add(shoulder);
+      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.14, 12), tint);
+      neck.position.y = 0.21;
       root.add(neck);
-      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.03, 10), new THREE.MeshStandardMaterial({ color: "#d8d5c8", roughness: 0.6 }));
-      cap.position.y = 0.225;
+      const brass = new THREE.MeshStandardMaterial({ color: "#d8a928", roughness: 0.3, metalness: 0.65 });
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.048, 0.035, 12), brass);
+      cap.position.y = 0.29;
       root.add(cap);
+      const label = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.088, 0.088, 0.1, 12),
+        new THREE.MeshStandardMaterial({ color: "#ece0bc", roughness: 0.85 }),
+      );
+      label.position.y = -0.08;
+      root.add(label);
       return root;
     }
     if (kind === "bucket") {
@@ -587,30 +807,68 @@ export class GameScene {
       body.position.y = -0.02;
       body.castShadow = true;
       root.add(body);
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.175, 0.018, 8, 24), new THREE.MeshStandardMaterial({ color: "#8a8f96", roughness: 0.35, metalness: 0.5 }));
+      const steel = new THREE.MeshStandardMaterial({ color: "#8a8f96", roughness: 0.35, metalness: 0.5 });
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.175, 0.018, 8, 24), steel);
       rim.rotation.x = Math.PI / 2;
       rim.position.y = 0.14;
       root.add(rim);
+      const handle = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.01, 6, 20, Math.PI), steel);
+      handle.position.y = 0.14;
+      handle.castShadow = true;
+      root.add(handle);
+      for (const lx of [-0.175, 0.175] as const) {
+        const lug = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.04, 0.03), steel);
+        lug.position.set(lx, 0.14, 0);
+        root.add(lug);
+      }
       return root;
     }
     const mat = new THREE.MeshStandardMaterial({
       color: PALETTE[i % 8],
       roughness: 0.8,
     });
-    const box = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), mat);
+    // Board crate: the tinted box reads as boards, framed by a dark wood cage
+    // of corner posts and edge rails so tumbles catch the light. Children[0]
+    // stays the tintable body so `setHighlight` still writes its emissive.
+    const box = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.56, 0.56), mat);
     box.castShadow = true;
     box.receiveShadow = true;
     root.add(box);
-    for (const axis of [0, 2]) {
-      const strap = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          axis === 0 ? 0.12 : 0.61,
-          0.615,
-          axis === 2 ? 0.12 : 0.61,
-        ),
-        new THREE.MeshStandardMaterial({ color: "#ece0bc", roughness: 0.9 }),
-      );
-      root.add(strap);
+    const wood = new THREE.MeshStandardMaterial({ color: "#54402c", roughness: 0.95 });
+    // Plank seams: thin belts a hair proud of every face.
+    for (const y of [-0.28, 0.28] as const) {
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(0.565, 0.02, 0.565), wood);
+      seam.position.y = y;
+      root.add(seam);
+    }
+    for (const [cx, cz] of [[-0.29, -0.29], [0.29, -0.29], [-0.29, 0.29], [0.29, 0.29]] as const) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.6, 0.055), wood);
+      post.position.set(cx, 0, cz);
+      post.castShadow = true;
+      root.add(post);
+    }
+    for (const y of [-0.29, 0.29] as const) {
+      for (const s of [-1, 1] as const) {
+        const railX = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.05, 0.05), wood);
+        railX.position.set(0, y, s * 0.29);
+        railX.castShadow = true;
+        root.add(railX);
+        const railZ = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.62), wood);
+        railZ.position.set(s * 0.29, y, 0);
+        railZ.castShadow = true;
+        root.add(railZ);
+      }
+    }
+    // Stamped stencil: a pale patch slashed through, on the two z faces.
+    const stencil = new THREE.MeshStandardMaterial({ color: "#ece0bc", roughness: 0.9 });
+    for (const sz of [-1, 1] as const) {
+      const patch = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.012), stencil);
+      patch.position.set(0, 0.02, sz * 0.282);
+      root.add(patch);
+      const slash = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.05, 0.008), stencil);
+      slash.position.set(0, 0.02, sz * 0.288);
+      slash.rotation.z = 0.79;
+      root.add(slash);
     }
     return root;
   }

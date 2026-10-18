@@ -82,20 +82,20 @@ export const SPAWNS = [
 export const PROPS: Prop[] = [
   { p: [-2, 0.5, -2], kind: "crate" },
   { p: [2, 0.5, 3], kind: "crate" },
-  { p: [9, 0.5, 0], kind: "crate" },
+  { p: [10, 0.5, 1], kind: "crate" },
   { p: [-4, 0.5, -2], kind: "gun" },
-  { p: [0, 0.5, -9], kind: "gun" },
+  { p: [1, 0.5, -10], kind: "gun" },
   { p: [0, 0.5, -4], kind: "bat" },
   { p: [-3, 0.5, 4], kind: "horn" },
-  { p: [-9, 0.5, 0], kind: "ball" },
-  { p: [8, 2.5, 8], kind: "ball" },
-  { p: [0, 0.5, 9], kind: "chair" },
+  { p: [-7.8, 0.5, 1.4], kind: "ball" },
+  { p: [6.8, 2.5, 6.8], kind: "ball" },
+  { p: [1, 0.5, 10], kind: "chair" },
   { p: [3, 0.5, -4], kind: "table" },
   { p: [-1, 0.5, 3], kind: "trashcan" },
   { p: [-4, 0.5, -4], kind: "bottle" },
   { p: [4.5, 0.5, -4], kind: "bucket" },
   { p: [1.2, 0.5, -1.2], kind: "crate" },
-  { p: [-9, 0.5, 0], kind: "gun" },
+  { p: [-10.2, 0.5, -1], kind: "gun" },
 ];
 export const PROP_STARTS = PROPS.map((p) => p.p);
 export const propKind = (id: number): PropKind | undefined =>
@@ -122,6 +122,17 @@ export type Pad = {
 export const PADS: Pad[] = [
   { x: 3.5, z: 3.5, r: 0.8, vx: 5, vz: 5, bounce: 9 },
   { x: -3.5, z: -3.5, r: 0.8, vx: -5, vz: -5, bounce: 9 },
+  // Satellite return pads hug the outer edge so a respawn at the SPAWN above
+  // the centre never materialises standing on the trigger.
+  { x: 10, z: 0, y: 0, r: 0.8, vx: -5, vz: 0, bounce: 9 },
+  { x: -10, z: 0, y: 0, r: 0.8, vx: 5, vz: 0, bounce: 9 },
+  { x: 0, z: 10, y: 0, r: 0.8, vx: 0, vz: -5, bounce: 9 },
+  { x: 0, z: -10, y: 0, r: 0.8, vx: 0, vz: 5, bounce: 9 },
+  // Perch return pads, aimed back at the centre slab, one on each perch.
+  { x: 8, z: 8, y: 2, r: 0.8, vx: -3.5, vz: -3.5, bounce: 9 },
+  { x: -8, z: -8, y: 2, r: 0.8, vx: 3.5, vz: 3.5, bounce: 9 },
+  { x: 8, z: -8, y: 2, r: 0.8, vx: -3.5, vz: 3.5, bounce: 9 },
+  { x: -8, z: 8, y: 2, r: 0.8, vx: 3.5, vz: -3.5, bounce: 9 },
 ];
 
 export const PALETTE = [
