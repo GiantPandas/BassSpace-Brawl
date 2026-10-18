@@ -1,27 +1,20 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
-  ARENA,
   AUTO_RANGE,
   DOOR_SLAM,
   DOOR_TRAVEL,
-  DOORS,
   HORN,
   IMPACT,
-  LEVEL,
   MELEE,
-  PADS,
-  PROPS,
-  propKind,
-  SPAWNS,
   STEP,
   TINY_ARENA,
   WEAPON,
   WINDOW,
-  WINDOWS,
   type Door,
   type PropKind,
   type WindowDef,
 } from "./level.js";
+import { DEFAULT_ARENA } from "./arena.js";
 import { CHAOS, COMBAT } from "./match.js";
 import { buildStats } from "./upgrades.js";
 import {
@@ -220,15 +213,20 @@ export class Simulation {
     }
   >();
   private events = new RAPIER.EventQueue(true);
-  constructor(public prediction = false) {
+  /**
+   * The layout is derived from the room code by `buildArena` on both sides,
+   * never shipped on the wire; the Stage stays the default for tests, the
+   * lobby preview and the loopback host worker.
+   */
+  constructor(public prediction = false, public arena = DEFAULT_ARENA) {
     this.world.timestep = STEP;
-    for (const b of LEVEL)
+    for (const b of arena.level)
       this.world.createCollider(
         RAPIER.ColliderDesc.cuboid(b.s[0] / 2, b.s[1] / 2, b.s[2] / 2)
           .setTranslation(...b.p)
           .setFriction(0.8),
       );
-    for (const def of DOORS) {
+    for (const def of arena.doors) {
       const body = this.world.createRigidBody(
         RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(...def.p),
       );
@@ -251,7 +249,7 @@ export class Simulation {
         slammed: new Set(),
       });
     }
-    PROPS.forEach((prop, i) => {
+    arena.props.forEach((prop, i) => {
       const bouncy = prop.kind === "ball";
       const body = this.world.createRigidBody(
         (prediction
@@ -272,7 +270,7 @@ export class Simulation {
     });
     // Panes are heavy dynamic bodies so they raise events against player KCCs,
     // exactly like pellets do; gravity is off and step() pins them in place.
-    for (const def of WINDOWS) {
+    for (const def of arena.windows) {
       const body = this.world.createRigidBody(
         RAPIER.RigidBodyDesc.dynamic()
           .setGravityScale(0)
@@ -291,8 +289,12 @@ export class Simulation {
     }
     this.world.step();
   }
+  /** Prop kind by id; ids are positions in the layout's prop list. */
+  kind(objectId: number): PropKind | undefined {
+    return this.arena.props[objectId - 1]?.kind;
+  }
   addPlayer(id: number) {
-    const spawn = SPAWNS[(id - 1) % 8];
+    const spawn = this.arena.spawns[(id - 1) % this.arena.spawns.length];
     const body = this.world.createRigidBody(
       RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(
         spawn[0],
@@ -496,7 +498,7 @@ export class Simulation {
       s.vy = 0;
     // A bounce pad: landing on it launches you toward its diagonal perch.
     if (c.controller.computedGrounded()) {
-      for (const pad of PADS) {
+      for (const pad of this.arena.pads) {
         const dxp = s.x - pad.x,
           dzp = s.z - pad.z;
         if (dxp * dxp + dzp * dzp <= pad.r * pad.r) {
@@ -542,7 +544,7 @@ export class Simulation {
     const g = env === "low-gravity" ? -18 * CHAOS.lowGravityFactor : -18;
     this.world.gravity = { x: 0, y: g, z: 0 };
     for (const [id, col] of this.propColliders) {
-      const kind = propKind(id);
+      const kind = this.kind(id);
       if (!kind) continue;
       const r = PROP_BOUNCE[kind];
       if (env === "bounce") {
@@ -569,7 +571,7 @@ export class Simulation {
     };
   }
   /** Stable hand pose shared by physics and shot visuals for compact tools. */
-  heldPose(s: PlayerState, kind = propKind(s.held)) {
+  heldPose(s: PlayerState, kind = this.kind(s.held)) {
     const eye = this.eye(s),
       d = this.direction(s),
       span = Math.max(0.001, Math.hypot(d.x, d.z)),
@@ -706,7 +708,7 @@ export class Simulation {
    */
   shoot(playerId: number): Shot | null {
     const c = this.players.get(playerId);
-    if (!c || PROPS[c.state.held - 1]?.kind !== "gun") return null;
+    if (!c || this.kind(c.state.held) !== "gun") return null;
     if (this.frame < (this.cooldowns.get(playerId) ?? 0)) return null;
     if ((this.reloadAt.get(playerId) ?? -1) > this.frame) return null;
     const s = c.state,
@@ -802,7 +804,7 @@ export class Simulation {
   /** Start refilling the held gun early; friendlier than waiting for empty. */
   reload(playerId: number) {
     const c = this.players.get(playerId);
-    if (!c || PROPS[c.state.held - 1]?.kind !== "gun") return false;
+    if (!c || this.kind(c.state.held) !== "gun") return false;
     if ((this.reloadAt.get(playerId) ?? -1) > this.frame) return false;
     if (c.state.ammo >= WEAPON.ammo) return false;
     this.reloadAt.set(
@@ -814,7 +816,7 @@ export class Simulation {
   /** Swing the held bat through a forgiving capsule-sized lane in front. */
   swing(playerId: number): Swing | null {
     const c = this.players.get(playerId);
-    if (!c || propKind(c.state.held) !== "bat") return null;
+    if (!c || this.kind(c.state.held) !== "bat") return null;
     if (this.frame < (this.meleeCooldowns.get(playerId) ?? 0)) return null;
     this.meleeCooldowns.set(playerId, this.frame + MELEE.cooldown);
     const s = c.state,
@@ -852,7 +854,7 @@ export class Simulation {
   }
   honk(playerId: number) {
     const c = this.players.get(playerId);
-    if (!c || propKind(c.state.held) !== "horn") return false;
+    if (!c || this.kind(c.state.held) !== "horn") return false;
     if (this.frame < (this.hornCooldowns.get(playerId) ?? 0)) return false;
     this.hornCooldowns.set(playerId, this.frame + HORN.cooldown);
     return true;
@@ -876,7 +878,7 @@ export class Simulation {
     // Picked up: the junk card's tag and bounce tuning go with it.
     this.propMeta.delete(objectId);
     const col = this.propColliders.get(objectId),
-      kind = propKind(objectId);
+      kind = this.kind(objectId);
     if (col && kind) {
       col.setRestitution(PROP_BOUNCE[kind]);
       col.setRestitutionCombineRule(
@@ -916,7 +918,7 @@ export class Simulation {
     this.propMeta.set(id, {
       thrower: playerId,
       build: c.state.build,
-      angry: st.angryBall && propKind(id) === "ball",
+      angry: st.angryBall && this.kind(id) === "ball",
       magnet: st.magnetGlove && !throwing,
       born: this.frame,
     });
@@ -984,7 +986,7 @@ export class Simulation {
       if (!c.state.held) continue;
       // Compact tools stay locked to one stable hand pose. Bulky throwable
       // props still pull back when a wall would clip them.
-      const kind = propKind(c.state.held),
+      const kind = this.kind(c.state.held),
         tool = kind === "gun" || kind === "bat" || kind === "horn",
         gun = kind === "gun",
         reach = gun ? 1.5 : 2.25,
@@ -1074,8 +1076,8 @@ export class Simulation {
       this.handleCollisions();
       // Chaos random explosions: on their own clock, anywhere in the arena.
       if (this.env === "explosions" && this.frame % CHAOS.explosion.period === 0) {
-        const x = ARENA.minX + Math.random() * (ARENA.maxX - ARENA.minX),
-          z = ARENA.minZ + Math.random() * (ARENA.maxZ - ARENA.minZ);
+        const x = this.arena.bounds.minX + Math.random() * (this.arena.bounds.maxX - this.arena.bounds.minX),
+          z = this.arena.bounds.minZ + Math.random() * (this.arena.bounds.maxZ - this.arena.bounds.minZ);
         this.explosionEvents.push({ x, y: 0.5, z });
         this.boomAt(
           { x, y: 0.5, z },
@@ -1095,7 +1097,7 @@ export class Simulation {
       for (const [id, body] of this.props) {
         if (id >= PELLET_ID_BASE) continue;
         if (body.translation().y < -8) {
-          const p = PROPS[id - 1].p;
+          const p = this.arena.props[id - 1].p;
           body.setTranslation({ x: p[0], y: p[1] + 1.5, z: p[2] }, true);
           body.setLinvel({ x: 0, y: 0, z: 0 }, true);
           this.propMeta.delete(id);
@@ -1482,7 +1484,7 @@ export class Simulation {
     const c = this.players.get(playerId);
     if (!c) return;
     const s = c.state,
-      spawn = SPAWNS[(s.id - 1) % SPAWNS.length];
+      spawn = this.arena.spawns[(s.id - 1) % this.arena.spawns.length];
     this.dropHeld(s.id);
     s.x = spawn[0];
     s.y = spawn[1];
@@ -1524,9 +1526,9 @@ export class Simulation {
     body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     body.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
-  /** The arena is the stage and its satellites: outside it, or below y=-8, you are out. */
+  /** The arena is the generated layout's bounds: outside it, or below y=-8, you are out. */
   private inArena(x: number, z: number) {
-    const b = this.env === "tiny-arena" ? TINY_ARENA : ARENA;
+    const b = this.env === "tiny-arena" ? TINY_ARENA : this.arena.bounds;
     return x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ;
   }
   propStates(): PropState[] {

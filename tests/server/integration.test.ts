@@ -9,7 +9,7 @@ import {
   encodeInputs,
   type Input,
 } from "../../src/shared/protocol.js";
-import { PROPS, SPAWNS } from "../../src/shared/level.js";
+import { buildArena } from "../../src/shared/arena.js";
 let server: http.Server,
   app: Awaited<ReturnType<typeof attachApplication>>,
   url: string;
@@ -230,7 +230,8 @@ test("the server decides every shot, and the whole room hears it", async () => {
   a.ws.send(JSON.stringify({ type: "action", request: 1, action: "shoot" }));
   assert.equal((await empty).accepted, false, "an empty hand fires nothing");
   // Lay a gun on open floor and stand both players either side of it.
-  const gun = PROPS.findIndex((p) => p.kind === "gun") + 1;
+  const arena = buildArena(a.welcome.code),
+    gun = arena.props.findIndex((p) => p.kind === "gun") + 1;
   // Away from the bounce pads: standing on one would slide the shooter off.
   room.sim.props.get(gun)!.setTranslation({ x: 0, y: 0.5, z: 1.5 }, true);
   await new Promise((r) => setTimeout(r, 250));
@@ -273,7 +274,7 @@ test("the server decides every shot, and the whole room hears it", async () => {
   assert.equal(victim.state.stagger > 0, true);
   assert.equal(room.members.has(b.welcome.id), true, "and nobody is removed");
 
-  const bat = PROPS.findIndex((p) => p.kind === "bat") + 1;
+  const bat = arena.props.findIndex((p) => p.kind === "bat") + 1;
   shooter.state.held = bat;
   room.sim.owners.set(gun, 0);
   room.sim.props.get(gun)!.setTranslation({ x: -20, y: 1, z: -20 }, true);
@@ -291,7 +292,7 @@ test("the server decides every shot, and the whole room hears it", async () => {
   a.ws.send(JSON.stringify({ type: "action", request: 4, action: "swing" }));
   assert.equal((await swung).object, bat, "the room sees the authoritative swing");
 
-  const horn = PROPS.findIndex((p) => p.kind === "horn") + 1;
+  const horn = arena.props.findIndex((p) => p.kind === "horn") + 1;
   shooter.state.held = horn;
   room.sim.owners.set(bat, 0);
   room.sim.owners.set(horn, a.welcome.id);
@@ -320,7 +321,7 @@ test("a fall through the stage while the lobby waits is not an elimination", asy
   room.sim.restore(player, { ...player.state, x: 0, y: -30, z: 0 });
   for (let i = 0; i < 60 && player.state.y < 0; i++)
     await new Promise((r) => setTimeout(r, 50));
-  const spawn = SPAWNS[(a.welcome.id - 1) % SPAWNS.length];
+  const spawn = buildArena(a.welcome.code).spawns[(a.welcome.id - 1) % 8];
   assert.equal(player.state.x, spawn[0]);
   assert.ok(Math.abs(player.state.y - spawn[1]) < 0.5, "back on top of the slab");
   assert.equal(player.state.z, spawn[2]);

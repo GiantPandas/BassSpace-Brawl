@@ -12,7 +12,8 @@ import {
   PELLET_ID_BASE,
   type Character,
 } from "../shared/simulation";
-import { STEP, PALETTE, CHARACTER_PALETTE, WEAPON, MELEE, HORN, DOORS, WINDOWS, propKind } from "../shared/level";
+import { STEP, PALETTE, CHARACTER_PALETTE, WEAPON, MELEE, HORN } from "../shared/level";
+import { DEFAULT_ARENA, buildArena } from "../shared/arena";
 import { CARDS, cardBit, buildStats } from "../shared/upgrades";
 import {
   EMOTES,
@@ -38,7 +39,7 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 $("app").innerHTML = `<div id="world"></div><div id="shade" class="shade"></div>
 <header class="topbar"><button id="about-button" class="brand" aria-label="About BassSpace Brawl"><span class="brand-mark"><svg viewBox="0 0 192 192" aria-hidden="true"><rect x="17" y="17" width="158" height="158" rx="46" fill="#2b2545" transform="rotate(-11 96 96)"/><g stroke="#c9f24f" stroke-width="13" stroke-linecap="round" fill="none"><path d="M107.8 62.6A52 52 0 0 1 107.8 129.4"/><path d="M133.5 50.1A80 80 0 0 1 133.5 141.9"/></g><circle cx="68" cy="96" r="30" fill="#c9f24f"/><circle cx="68" cy="96" r="13" fill="#2b2545"/></svg></span><span class="brand-word">bassspace <b>brawl</b></span><small></small></button><div id="top-actions" class="top-actions"><span id="net-mode" class="pill net-mode" hidden><i class="dot"></i> <span id="net-mode-text"></span></span><button id="help-button" class="icon-button" aria-label="Controls and help">?</button></div></header>
-<main id="lobby" class="lobby"><div class="eyebrow">2–8 players · one floating stage</div><h1><span class="line"><span>Turn the bass up.</span></span><span class="line"><span>Throw them <em>out.</em></span></span></h1><p class="intro">Shove guns, throwable furniture and upgrades that break every round.<br>Built with Three.js, Rapier physics, and proximity voice.</p><a class="github-button" href="https://github.com/larshurrelb/friendslop-base" target="_blank" rel="noopener noreferrer" aria-label="Get BassSpace Brawl on GitHub">Get it on GitHub <span class="github-arrow" aria-hidden="true">↗</span></a><form id="entry" class="entry-card"><label for="name">WHAT SHOULD WE CALL YOU?</label><div class="name-input"><div class="avatar-chip">✳</div><input id="name" aria-label="Your name" autocomplete="nickname" maxlength="20" placeholder="Your name" required value="Guest"></div><button class="primary" id="create" type="submit">Create a room <span>↗</span></button><div class="separator">or find your friends</div><div class="join-row"><input id="join-code" aria-label="Room code" placeholder="ROOM CODE" maxlength="6" autocomplete="off"><button id="join" type="button">Join →</button></div><div class="entry-note">No accounts. Just a room code.</div><p id="entry-error" class="error" hidden></p></form><div class="lobby-foot"><span>2–8 players</span><span>Proximity voice</span><span>Cards between rounds</span></div><p class="mobile-notice">A keyboard and mouse are required to play.</p></main>
+<main id="lobby" class="lobby"><div class="eyebrow">2–8 players · an arena shaped by the room code</div><h1><span class="line"><span>Turn the bass up.</span></span><span class="line"><span>Throw them <em>out.</em></span></span></h1><p class="intro">Shove guns, throwable furniture and upgrades that break every round.<br>Built with Three.js, Rapier physics, and proximity voice.</p><a class="github-button" href="https://github.com/larshurrelb/friendslop-base" target="_blank" rel="noopener noreferrer" aria-label="Get BassSpace Brawl on GitHub">Get it on GitHub <span class="github-arrow" aria-hidden="true">↗</span></a><form id="entry" class="entry-card"><label for="name">WHAT SHOULD WE CALL YOU?</label><div class="name-input"><div class="avatar-chip">✳</div><input id="name" aria-label="Your name" autocomplete="nickname" maxlength="20" placeholder="Your name" required value="Guest"></div><button class="primary" id="create" type="submit">Create a room <span>↗</span></button><div class="separator">or find your friends</div><div class="join-row"><input id="join-code" aria-label="Room code" placeholder="ROOM CODE" maxlength="6" autocomplete="off"><button id="join" type="button">Join →</button></div><div class="entry-note">No accounts. Just a room code.</div><p id="entry-error" class="error" hidden></p></form><div class="lobby-foot"><span>2–8 players</span><span>Proximity voice</span><span>Cards between rounds</span></div><p class="mobile-notice">A keyboard and mouse are required to play.</p></main>
 <footer id="footer" class="footer"><span>Every round makes the brawl worse.</span><span class="version">BASSSPACE BRAWL &nbsp; / &nbsp; v0.1</span></footer>
 <div id="hud" class="hud" hidden><div class="room-bar"><div><small>YOUR ROOM</small><span id="room-code" class="room-code">------</span></div><button id="copy-room" aria-label="Copy room invite">Copy invite ↗</button><span id="player-count" class="count">1 / 8</span><span id="match-timer" class="count"></span><span id="bucks" class="count" title="Bucks — win rounds to earn more">💰 0</span><select id="mode-select" aria-label="Game mode" hidden><option value="ffa">Free for all</option><option value="teams-2">Teams 2v2</option><option value="teams-3">Teams 3v3</option><option value="teams-4">Teams 4v4</option><option value="king">King of the Yard</option><option value="chaos">Chaos Mode</option></select><button id="ready-button">Ready up</button></div><div id="ammo" class="ammo" hidden></div><div id="crosshair" class="crosshair"></div><div id="hitflash" class="hitflash"></div><div id="interact" class="interact" hidden></div><div class="bottom-left"><span class="zone-icon">◈</span><div><div id="zone-name" class="zone-name">The stage</div><div id="zone-desc" class="zone-desc">CENTER RING · OPEN SKY</div></div></div><div class="voice-controls"><button id="enable-voice">Enable voice</button><button id="mute" hidden aria-label="Mute microphone">Mic on</button><select id="voice-mode" aria-label="Microphone mode"><option value="open">Open mic</option><option value="ptt">Push to talk</option></select><span id="speaking-light" class="speaking-light"></span></div><div class="bottom-right"><button id="locker-button">Locker <span>✦</span></button><button id="friends-button">Friends <span id="friend-number">1</span></button><button id="debug-button">Diagnostics <span>⌁</span></button></div><div id="pause" class="pause"><div class="eyebrow" style="justify-content:center">The stage is open</div><h2>Break something.</h2><p>Test the weapons and break the furniture.<br>Then ready up and start the brawl.</p><button id="resume" class="primary">Click to explore →</button><small>WASD to move · Mouse to look · Esc to pause</small></div><div id="countdown" class="countdown" hidden></div><div id="round-banner" class="banner" hidden></div><div id="build" class="build" hidden><div class="eyebrow">CHOOSE AN UPGRADE</div><div id="build-cards" class="build-cards"></div></div></div>
 <aside id="friends" class="drawer" hidden><button class="close" data-close="friends" aria-label="Close friends">×</button><h3>In good company</h3><div id="member-list"></div><button id="solo-tab" class="primary">Open a second player <span>↗</span></button><p class="debug-note">Test solo in another tab. Use headphones when testing microphones.</p><button id="leave" class="primary" style="background:transparent;color:#8f88ad;border-color:#cfcbdd">Leave room</button></aside>
@@ -47,6 +48,10 @@ $("app").innerHTML = `<div id="world"></div><div id="shade" class="shade"></div>
 <aside id="about" class="drawer" hidden><button class="close" data-close="about" aria-label="Close about">×</button><h3>A stage with a temper.</h3><p class="about-copy">BassSpace Brawl is a 2–8 player physics arena brawler. Shove guns, throwable furniture, proximity voice and upgrade cards that make every round more broken than the last.</p><p class="debug-note">Three.js · Rapier · TypeScript<br>Original Blender characters & synthetic acoustics</p></aside>
 <aside id="locker" class="drawer" hidden><button class="close" data-close="locker" aria-label="Close locker">×</button><h3>The Locker</h3><p class="debug-note">Cosmetics only — nothing here hits harder. Win rounds to earn 💰.</p><div id="shop-skins" class="shop-section"><h4>Skins</h4></div><div id="shop-hats" class="shop-section"><h4>Hats</h4></div><div id="shop-emotes" class="shop-section"><h4>Emotes <small>(keys 1–4)</small></h4></div><div id="shop-voice" class="shop-section"><h4>Voice</h4></div></aside><div id="toast" class="toast" hidden></div><div id="loading" class="loading">Warming up the bass…</div>`;
 const scene = new GameScene($("world"));
+// The room's arena: the Stage until a welcome brings the generated layout.
+let arena = DEFAULT_ARENA;
+/** Prop kind by id for the current arena — ids are positions in `arena.props`. */
+const kindOf = (id: number) => arena.props[id - 1]?.kind;
 let sim: Simulation | undefined,
   local: Character | undefined,
   socket: Channel | undefined,
@@ -283,7 +288,9 @@ async function connect() {
         baselines.clear();
         baseline = 0;
         sim?.dispose();
-        sim = new Simulation(true);
+        arena = buildArena(code);
+        scene.renderArena(arena);
+        sim = new Simulation(true, arena);
         if (Array.isArray(m.doors)) sim.syncDoors(m.doors);
         if (Array.isArray(m.windows)) sim.syncWindows(m.windows);
         local = sim.addPlayer(id);
@@ -453,7 +460,7 @@ async function connect() {
       }
       if (m.type === "door") {
         sim?.setDoor(m.id, m.open);
-        const door = DOORS.find((d) => d.id === m.id);
+        const door = arena.doors.find((d) => d.id === m.id);
         if (door)
           voice.spatial?.effect(
             { x: door.p[0], y: door.p[1], z: door.p[2] },
@@ -462,7 +469,7 @@ async function connect() {
       }
       if (m.type === "window" && m.broken) {
         sim?.setWindow(m.id, true);
-        const win = WINDOWS.find((w) => w.id === m.id);
+        const win = arena.windows.find((w) => w.id === m.id);
         if (win) {
           scene.breakWindow(m.id);
           voice.spatial?.effect(
@@ -562,7 +569,7 @@ function snapshot(s: Snapshot) {
   }
   // Balls announce themselves: a reversal in the authoritative height is a bounce.
   for (const p of props) {
-    if (propKind(p.id) !== "ball") continue;
+    if (kindOf(p.id) !== "ball") continue;
     const previous = ballHeights.get(p.id),
       dy = previous ? p.y - previous.y : 0;
     if (previous && !p.owner && previous.dy < -0.05 && dy > 0.015)
@@ -620,7 +627,7 @@ function interact(throwing = false) {
   const s = local.state;
   if (!s.held && !sim.target(s)) {
     const door = sim.doorTarget(s);
-    if (door && !DOORS.find((d) => d.id === door)?.auto) {
+    if (door && !arena.doors.find((d) => d.id === door)?.auto) {
       send({ type: "action", request: ++action, action: "door", object: door });
       return;
     }
@@ -636,7 +643,7 @@ function interact(throwing = false) {
 function fire() {
   if (!local || !sim) return;
   const held = local.state.held,
-    kind = propKind(held);
+    kind = kindOf(held);
   if (kind !== "gun" && kind !== "bat" && kind !== "horn") return;
   const now = performance.now();
   const cooldown =
@@ -1034,7 +1041,10 @@ function zone(s: { x: number; y: number; z: number }): [string, string] {
   const m = Math.max(Math.abs(s.x), Math.abs(s.z));
   if (s.y > 2.4) return ["The perches", "UP HIGH · NO HANDHOLDING"];
   if (m >= 7) return ["The satellites", "OUT ON A LIMB · MIND THE EDGE"];
-  return ["The stage", "CENTER RING · OPEN SKY"];
+  return [
+    arena.name,
+    arena === DEFAULT_ARENA ? "CENTER RING · OPEN SKY" : "HELD BY CODE · MIND THE VOID",
+  ];
 }
 let debugTime = 0;
 function debug(now: number) {
@@ -1211,7 +1221,7 @@ function frame(now: number) {
       jz = (Math.random() - 0.5) * shake * 0.22;
     const s = local.state,
       eye = sim.eye(s);
-    const gunHeld = propKind(s.held) === "gun";
+    const gunHeld = kindOf(s.held) === "gun";
     $("ammo").hidden = !gunHeld;
     if (gunHeld)
       $("ammo").textContent = s.ammo > 0 ? String(s.ammo) : "RELOADING";
@@ -1310,28 +1320,28 @@ function frame(now: number) {
     $("crosshair").classList.toggle("target", !!target || !!door);
     $("crosshair").classList.toggle(
       "armed",
-      ["gun", "bat", "horn"].includes(propKind(s.held) ?? ""),
+      ["gun", "bat", "horn"].includes(kindOf(s.held) ?? ""),
     );
     $("interact").hidden =
       (!target && !door && !s.held) ||
       (!document.pointerLockElement && !previewControls);
     $("interact").innerHTML = s.held
       ? `<kbd class="key">E</kbd> Drop <span style="margin-left:10px"><kbd class="key">Q</kbd> Throw</span>${
-          ["gun", "bat", "horn"].includes(propKind(s.held) ?? "")
+          ["gun", "bat", "horn"].includes(kindOf(s.held) ?? "")
             ? `<span style="margin-left:10px"><kbd class="key">Click</kbd> ${
-                propKind(s.held) === "gun"
+                kindOf(s.held) === "gun"
                   ? "Fire"
-                  : propKind(s.held) === "bat"
+                  : kindOf(s.held) === "bat"
                     ? "Swing"
                     : "Honk"
               }</span>`
             : ""
         }`
       : door
-        ? DOORS.find((d) => d.id === door)?.auto
+        ? arena.doors.find((d) => d.id === door)?.auto
           ? "Opens by itself"
-          : `<kbd class="key">E</kbd> ${DOORS.find((d) => d.id === door)!.zone}`
-        : `<kbd class="key">E</kbd> Pick up the ${propKind(target) ?? "thing"}`;
+          : `<kbd class="key">E</kbd> ${arena.doors.find((d) => d.id === door)!.zone}`
+        : `<kbd class="key">E</kbd> Pick up the ${kindOf(target) ?? "thing"}`;
     const [zoneName, zoneDesc] = zone(s);
     $("zone-name").textContent = zoneName;
     $("zone-desc").textContent = zoneDesc;

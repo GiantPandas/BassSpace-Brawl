@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
-import { CHARACTER_PALETTE, DOORS, LEVEL, PADS, PALETTE, PROPS, WINDOWS, type PropKind, type Vec3 } from "../../shared/level";
+import { CHARACTER_PALETTE, PALETTE, type PropKind, type Vec3 } from "../../shared/level";
+import { DEFAULT_ARENA, type ArenaLayout } from "../../shared/arena";
 import { PELLET_ID_BASE, type DoorState, type WindowState } from "../../shared/simulation";
 import { cardBit } from "../../shared/upgrades";
 import {
@@ -133,6 +134,10 @@ export class GameScene {
   playing = false;
   front: THREE.Object3D[] = [];
   highlight = 0;
+  /** The layout currently rendered; the join flow swaps in the room's arena. */
+  arena = DEFAULT_ARENA;
+  /** Every arena mesh hangs off this group so `renderArena` can replace it whole. */
+  private arenaGroup: THREE.Group | null = null;
   labels: HTMLDivElement;
   clock = 0;
   loaded: Promise<void>;
@@ -179,13 +184,58 @@ export class GameScene {
     sun.shadow.camera.bottom = -32;
     sun.shadow.normalBias = 0.03;
     this.scene.add(sun, sun.target);
-    for (const b of LEVEL) {
+    this.renderArena();
+    this.loaded = new GLTFLoader()
+      .loadAsync(new URL("models/common-worker.glb", document.baseURI).href)
+      .then((asset) => {
+        this.asset = asset;
+        const cast = [
+          { p: [-2, 0, -1], color: 2, phase: 2.75 },
+          { p: [0, 0, -2.5], color: 1, phase: 4.85 },
+          { p: [2, 0, -1], color: 3, phase: 0.65 },
+        ] as const;
+        for (const [i, performer] of cast.entries()) {
+          const a = this.avatar(60000 + i, "", performer.color);
+          const home = new THREE.Vector3(...performer.p);
+          a.root.position.copy(home);
+          a.label.style.display = "none";
+          this.preview.push(a.root);
+          this.previewCast.push({ avatar: a, home, phase: performer.phase });
+        }
+        this.animatePreview(0);
+      });
+    addEventListener("resize", () => this.resize());
+    this.resize();
+    this.overview(0);
+  }
+  /**
+   * (Re)build the whole arena as geometry. The constructor renders the default
+   * Stage for the lobby; the join flow calls this again with the room's
+   * generated layout (src/shared/arena.ts), which physics was built from.
+   */
+  renderArena(arena: ArenaLayout = this.arena) {
+    this.arena = arena;
+    if (this.arenaGroup) {
+      this.scene.remove(this.arenaGroup);
+      this.arenaGroup.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (mesh.geometry) mesh.geometry.dispose();
+        if (mesh.material) (mesh.material as THREE.Material).dispose();
+      });
+    }
+    this.props.clear();
+    this.doors.clear();
+    this.windows.clear();
+    this.front.length = 0;
+    const group = this.arenaGroup = new THREE.Group();
+    this.scene.add(group);
+    for (const b of arena.level) {
       const mesh = this.box(b.p, b.s, b.color);
       if (b.hide) this.front.push(mesh);
     }
-    // The Stage: the LEVEL boxes above already render every platform, satellite,
-    // perch and bounce pad as a solid slab. PADS adds a visible spring on each mat.
-    for (const pad of PADS) {
+    // Bounce pads get a visible spring on each mat; the mat itself is a
+    // LEVEL box. Generated arenas lift mats off the void with an explicit y.
+    for (const pad of arena.pads) {
       const coil = new THREE.Mesh(
         new THREE.TorusGeometry(pad.r * 0.6, 0.05, 10, 28),
         new THREE.MeshStandardMaterial({
@@ -195,17 +245,17 @@ export class GameScene {
         }),
       );
       coil.rotation.x = Math.PI / 2;
-      coil.position.set(pad.x, 0.12, pad.z);
+      coil.position.set(pad.x, (pad.y ?? 0) + 0.12, pad.z);
       coil.castShadow = true;
-      this.scene.add(coil);
+      group.add(coil);
     }
-    PROPS.forEach((prop, i) => {
+    arena.props.forEach((prop, i) => {
       const root = this.makeProp(i);
       root.position.set(...prop.p);
       this.props.set(i + 1, root);
-      this.scene.add(root);
+      group.add(root);
     });
-    for (const def of DOORS) {
+    for (const def of arena.doors) {
       const leaf = new THREE.Group();
       const panel = new THREE.Mesh(
         new THREE.BoxGeometry(...def.s),
@@ -236,9 +286,9 @@ export class GameScene {
       leaf.add(handle);
       leaf.position.set(...def.p);
       this.doors.set(def.id, leaf);
-      this.scene.add(leaf);
+      group.add(leaf);
     }
-    for (const def of WINDOWS) {
+    for (const def of arena.windows) {
       const root = new THREE.Group();
       root.position.set(...def.p);
       // The thin axis is z on north/south walls, x elsewhere. Build the frame
@@ -273,30 +323,8 @@ export class GameScene {
         root.add(bar);
       }
       this.windows.set(def.id, { glass, root });
-      this.scene.add(root);
+      group.add(root);
     }
-    this.loaded = new GLTFLoader()
-      .loadAsync(new URL("models/common-worker.glb", document.baseURI).href)
-      .then((asset) => {
-        this.asset = asset;
-        const cast = [
-          { p: [-2, 0, -1], color: 2, phase: 2.75 },
-          { p: [0, 0, -2.5], color: 1, phase: 4.85 },
-          { p: [2, 0, -1], color: 3, phase: 0.65 },
-        ] as const;
-        for (const [i, performer] of cast.entries()) {
-          const a = this.avatar(60000 + i, "", performer.color);
-          const home = new THREE.Vector3(...performer.p);
-          a.root.position.copy(home);
-          a.label.style.display = "none";
-          this.preview.push(a.root);
-          this.previewCast.push({ avatar: a, home, phase: performer.phase });
-        }
-        this.animatePreview(0);
-      });
-    addEventListener("resize", () => this.resize());
-    this.resize();
-    this.overview(0);
   }
   box(p: number[], s: number[], color: string) {
     const m = new THREE.Mesh(
@@ -306,7 +334,7 @@ export class GameScene {
     m.position.set(...(p as [number, number, number]));
     m.castShadow = true;
     m.receiveShadow = true;
-    this.scene.add(m);
+    (this.arenaGroup ?? this.scene).add(m);
     return m;
   }
   /** A practical fixture's warm pool of light. Kept shadowless to stay cheap on 8-player GPUs. */
@@ -378,7 +406,7 @@ export class GameScene {
   /** A throwable prop's visual mesh. Children[0] is always the tintable body: `setHighlight` writes its emissive. */
   makeProp(i: number) {
     const root = new THREE.Group(),
-      kind = PROPS[i].kind;
+      kind = this.arena.props[i].kind;
     if (kind === "ball") {
       const ball = new THREE.Mesh(
         new THREE.SphereGeometry(0.3, 24, 16),
@@ -596,7 +624,7 @@ export class GameScene {
   /** Shatter VFX: the pane vanishes and a handful of shards spray out. */
   breakWindow(id: number) {
     const w = this.windows.get(id),
-      def = WINDOWS.find((d) => d.id === id);
+      def = this.arena.windows.find((d) => d.id === id);
     if (!w || !def || !w.glass.visible) return;
     w.glass.visible = false;
     // The wall normal is the pane's thin axis: z for north/south walls, x otherwise.
@@ -665,7 +693,7 @@ export class GameScene {
   updateDoors(states: DoorState[]) {
     for (const s of states) {
       const leaf = this.doors.get(s.id),
-        def = DOORS.find((d) => d.id === s.id);
+        def = this.arena.doors.find((d) => d.id === s.id);
       if (!leaf || !def) continue;
       const e = s.progress * s.progress * (3 - 2 * s.progress);
       leaf.position.set(
@@ -810,7 +838,7 @@ export class GameScene {
   /** Exact rendered barrel tip, after interpolation, for a tracer with no side gap. */
   muzzle(id: number): Vec3 | undefined {
     const gun = this.props.get(id);
-    if (!gun || PROPS[id - 1]?.kind !== "gun") return;
+    if (!gun || this.arena.props[id - 1]?.kind !== "gun") return;
     gun.updateMatrixWorld(true);
     const p = gun.localToWorld(new THREE.Vector3(0, 0.02, -0.64));
     return { x: p.x, y: p.y, z: p.z };
@@ -1291,8 +1319,8 @@ export class GameScene {
           Math.max(0.4, hit.distanceTo(focus) - 0.08),
         );
     };
-    for (const box of LEVEL) test(box.p, box.s);
-    for (const door of DOORS) {
+    for (const box of this.arena.level) test(box.p, box.s);
+    for (const door of this.arena.doors) {
       const leaf = this.doors.get(door.id);
       if (leaf) test(leaf.position.toArray(), door.s);
     }

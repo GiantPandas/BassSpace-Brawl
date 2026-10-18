@@ -9,6 +9,7 @@ import {
   type PropState,
 } from "../shared/protocol.js";
 import { MAX_PLAYERS, STEP } from "../shared/level.js";
+import { buildArena } from "../shared/arena.js";
 import {
   MATCH,
   assignTeams,
@@ -345,7 +346,7 @@ export async function createHost(options: { maxRooms?: number } = {}) {
     if (!room) {
       room = {
         code,
-        sim: new Simulation(),
+        sim: new Simulation(false, buildArena(code)),
         members: new Map(),
         nextId: 1,
         host: 1,

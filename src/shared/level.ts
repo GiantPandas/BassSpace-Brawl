@@ -111,6 +111,8 @@ export type Pad = {
   z: number;
   /** Radius of the pad's trigger footprint. */
   r: number;
+  /** Top surface height of the mat; 0 when omitted (the Stage sits at y=0). */
+  y?: number;
   /** Horizontal launch velocity (m/s) toward the perch. */
   vx: number;
   vz: number;

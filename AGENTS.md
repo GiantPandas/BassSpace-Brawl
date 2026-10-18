@@ -52,6 +52,8 @@ src/
                                the movement/knockback cards in the simulation; the rest
                                are data only until their phases land
     acoustics.ts              REVERB_REGIONS (room/hall boxes, IR paths, wet levels), regionWeights()
+    arena.ts                  Procedural arenas: buildArena(roomCode) -> ArenaLayout {name, level, doors,
+                              windows, spawns, props, pads, bounds}; DEFAULT_ARENA is the hand-built Stage
     protocol.ts               Binary Writer/Reader, encode/decode for inputs, snapshots, voice
                               frames; PlayerState/PropState/Input types; VERSION = 4
     simulation.ts             Rapier world + character motor. THE authority boundary.
@@ -304,6 +306,7 @@ you are in.
 | Tune movement | `Simulation.motor()` | Runs identically on both sides. Gravity is set in the Rapier world **and** the motor's vertical acceleration — change both. |
 | Add or tune an upgrade card | `src/shared/upgrades.ts` (`CARDS`, `buildStats`, `IMPLEMENTED_CARDS`), effects in `simulation.ts` `motor()`/`swing()`/`shoot()`, offers in `host/index.ts` `dealOffers()` | One bit per card in `PlayerState.build`; only ids in `IMPLEMENTED_CARDS` may be dealt. Card order is the wire format — don't reorder or remove entries. |
 | Add or tune a game mode | `MODES`/`CHAOS`/`MODIFIERS`/`assignTeams`/`chaosModifierFor` in `src/shared/match.ts`; env physics in `simulation.ts` (`setEnv`, `explosionEvents`); machine in `host/index.ts` (lobby gate, `endRound`, `retire`); UI in `main.ts` + `scene.ts` | Modes ride the JSON `match` broadcast — no binary protocol change. Chaos modifiers must derive identically on both sides from room code + round; keep that pure. UI contract: `#mode-select`, `.team-badge`, `.king-tag`. |
+| Generate or tune arenas | `src/shared/arena.ts` (`buildArena`, `DEFAULT_ARENA`), consumed by `new Simulation(pred, arena)` in `host/index.ts` (`ensureRoom` passes `buildArena(code)`) and in `main.ts` welcome (`buildArena(code)` + `scene.renderArena(arena)`) | Same room code derives the same layout on both sides — the chaos-modifier pattern, pure and isomorphic; no arena state crosses the wire. Generator invariants tests rely on: centre slab at origin with top y=0 and ≥9 m wide, first gun/horn/crate rest on the centre slab, first perch hangs off it with a walkable centre pad, 8 spawns on solid ground, ids are `props[i]` order. |
 | Add a player action | `app.ts` `msg.type === "action"` → validate with server state → mutate `Simulation`; client trigger in `main.ts`; visual in `scene.ts` | Clients never decide ownership or authoritative position. Dedupe by `request`. |
 | Add replicated state | `protocol.ts` writer **and** reader, `PlayerState`/`PropState`, tests in `core.test.ts`, tables in `docs/architecture.md` | Bump `VERSION` for incompatible layouts. Keep membership/control out of the tick. Respect the fixed record sizes and ±327.67 m prop range. |
 | Change how remote players look or animate | `scene.ts` `avatar()`, `updatePlayer()`, `render()` | Runtime-owned bones: section 7. |

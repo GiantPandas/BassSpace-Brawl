@@ -78,10 +78,18 @@ test("Chrome lobby, authoritative movement and reconnect", async ({
   await expect(page.locator("#player-count")).toHaveText("2 / 8");
   const friendId = (await state(friend)).id;
   const before = await state(page);
+  // Face the centre: generated arenas keep the ring around it walkable.
+  await page.evaluate(() => {
+    const s = (window as any).__friendslop.state;
+    (window as any).__friendslop.look(Math.atan2(s.x, s.z), 0);
+  });
   await page.evaluate(() => (window as any).__friendslop.input("KeyW", true));
   await expect
-    .poll(async () => (await state(page)).z)
-    .toBeLessThan(before.z - 2);
+    .poll(async () => {
+      const now = await state(page);
+      return Math.hypot(now.x - before.x, now.z - before.z);
+    })
+    .toBeGreaterThan(2);
   await page.evaluate(() => (window as any).__friendslop.input("KeyW", false));
   await page.screenshot({ path: "test-results/room.png" });
   await friend.reload();
@@ -190,10 +198,16 @@ test("Chrome pointer lock, Blender character, pickup, throw and crouch", async (
   const friend = await context.newPage();
   await join(friend, code, "Clay");
   await controls(page);
+  const backed = await state(page);
   await page.evaluate(() => (window as any).__friendslop.input("KeyS", true));
-  // The Stage: back up a little on the slab. The satellite past the slab edge
-  // would drop the walker into the void.
-  await expect.poll(async () => (await state(page)).z).toBeGreaterThan(4.4);
+  // Back up a little on the slab. Any generated arena may put a perch, a pad
+  // or cover wall in the old straight-line path, so measure distance moved.
+  await expect
+    .poll(async () => {
+      const now = await state(page);
+      return Math.hypot(now.x - backed.x, now.z - backed.z);
+    })
+    .toBeGreaterThan(1.5);
   await page.evaluate(() => {
     (window as any).__friendslop.input("KeyS", false);
     (window as any).__friendslop.look(0.6, 0.05);
@@ -223,16 +237,36 @@ test("Chrome pointer lock, Blender character, pickup, throw and crouch", async (
     )
     .toBe(true);
   await page.screenshot({ path: "test-results/character.png" });
+  const faced = await state(page);
   await page.evaluate(() => {
     (window as any).__friendslop.look(0, 0.55);
     (window as any).__friendslop.input("KeyW", true);
   });
   await expect
-    .poll(async () => (await state(page)).z, { timeout: 15000 })
-    .toBeLessThan(0.65);
+    .poll(async () => {
+      const now = await state(page);
+      return Math.hypot(now.x - faced.x, now.z - faced.z);
+    }, { timeout: 15000 })
+    .toBeGreaterThan(1.5);
   await page.evaluate(() => (window as any).__friendslop.input("KeyW", false));
   // Aim at a real prop rather than a guessed angle; props settle where they like.
-  expect(await page.evaluate(() => (window as any).aimAtProp(15))).toBe(15);
+  const picked = await page.evaluate(async () => {
+    const d = (window as any).__friendslop,
+      s = d.state,
+      slab = d.sim.arena.level.find((b: any) => b.kind === "stage");
+    const onSlab = (p: any, b: any) =>
+      Math.abs(p.p[0] - b.p[0]) <= b.s[0] / 2 && Math.abs(p.p[2] - b.p[2]) <= b.s[2] / 2;
+    let best: any = null;
+    d.sim.arena.props.forEach((p: any, i: number) => {
+      if (Math.abs(p.p[1] - 0.5) > 0.01 || !onSlab(p, slab)) return;
+      const dd = (p.p[0] - s.x) ** 2 + (p.p[2] - s.z) ** 2;
+      if (!best || dd < best.d) best = { d: dd, id: i + 1, x: p.p[0], z: p.p[2] };
+    });
+    if (!best) return 0;
+    await (window as any).walkTo(best.x, best.z);
+    return (window as any).aimAtProp(best.id);
+  });
+  expect(picked).toBeGreaterThan(0);
   await page.evaluate(() => (window as any).__friendslop.action());
   await expect.poll(async () => (await state(page)).held).toBeGreaterThan(0);
   const held = (await state(page)).held;
@@ -420,6 +454,12 @@ test("original jump and footstep audio works without enabling the microphone", a
       );
     }, 20);
   });
+  // Generated arenas put spawn a couple of metres from an edge: face the
+  // centre slab before walking, or the walker backs into the void.
+  await page.evaluate(() => {
+    const s = (window as any).__friendslop.state;
+    (window as any).__friendslop.look(Math.atan2(s.x, s.z), 0);
+  });
   await page.keyboard.down("w");
   await expect
     .poll(() => page.evaluate(() => (window as any).__sounds.includes("step")))
@@ -534,22 +574,70 @@ test("a gun shove, then a bounce pad flings you at the perch", async ({
   await controls(page);
   await controls(friend);
   await page.bringToFront();
-  // Both start on the stage; the gun rests at its spawn.
-  await walkTo(page, -3.5, -1.5);
-  await friend.evaluate(() => (window as any).walkTo(0, 2));
-  expect(await page.evaluate(() => (window as any).aimAtProp(4))).toBe(4);
+  // Both start on the centre slab; a gun always rests within walking reach.
+  const gun = await page.evaluate(async () => {
+    const d = (window as any).__friendslop,
+      s = d.state,
+      slab = d.sim.arena.level.find((b: any) => b.kind === "stage");
+    const onSlab = (x: number, z: number, b: any) =>
+      Math.abs(x - b.p[0]) <= b.s[0] / 2 && Math.abs(z - b.p[2]) <= b.s[2] / 2;
+    let best: any = null;
+    d.sim.arena.props.forEach((p: any, i: number) => {
+      if (p.kind !== "gun" || !onSlab(p.p[0], p.p[2], slab)) return;
+      const dd = (p.p[0] - s.x) ** 2 + (p.p[2] - s.z) ** 2;
+      if (!best || dd < best.d) best = { d: dd, id: i + 1, x: p.p[0], z: p.p[2] };
+    });
+    if (!best) return 0;
+    await (window as any).walkTo(best.x, best.z);
+    return (window as any).aimAtProp(best.id);
+  });
+  expect(gun).toBeGreaterThan(0);
+  await friend.evaluate(() => (window as any).walkTo(0, 0));
   await page.evaluate(() => (window as any).__friendslop.action());
-  await expect.poll(async () => (await state(page)).held).toBe(4);
+  await expect.poll(async () => (await state(page)).held).toBe(gun);
   await page.screenshot({ path: "test-results/gun.png" });
-  const before = await state(friend);
-  await page.evaluate(
-    ([x, z]) => (window as any).aimAt(x, 1.5, z),
-    [before.x, before.z] as const,
-  );
-  await page.evaluate(() => (window as any).__friendslop.shoot());
-  await expect
-    .poll(async () => (await state(friend)).stagger, { timeout: 5000 })
-    .toBeGreaterThan(0);
+  await page.screenshot({ path: "test-results/gun.png" });
+  // A cover wall may stand between them: sidestep along it, staying clear of
+  // bounce pads, and try again from another angle.
+  let before = await state(friend),
+    staggered = false;
+  for (let shot = 0; shot < 4 && !staggered; shot++) {
+    before = await state(friend);
+    await page.evaluate(
+      ([x, z]) => (window as any).aimAt(x, 1.5, z),
+      [before.x, before.z] as const,
+    );
+    await page.evaluate(() => (window as any).__friendslop.shoot());
+    try {
+      await expect
+        .poll(async () => (await state(friend)).stagger, { timeout: 1500 })
+        .toBeGreaterThan(0);
+      staggered = true;
+    } catch {
+      await page.evaluate(
+        async ([fx, fz]) => {
+          const d = (window as any).__friendslop,
+            s = d.state;
+          const dx = s.x - fx,
+            dz = s.z - fz,
+            len = Math.hypot(dx, dz) || 1;
+          const cands: number[][] = [
+            [s.x - (dz / len) * 1.6, s.z + (dx / len) * 1.6],
+            [s.x + (dz / len) * 1.6, s.z - (dx / len) * 1.6],
+            [s.x + (dx / len) * 0.9, s.z + (dz / len) * 0.9],
+          ];
+          const clear = (x: number, z: number) =>
+            d.sim.arena.pads.every(
+              (p: any) => (p.y ?? 0) !== 0 || Math.hypot(p.x - x, p.z - z) > 1.4,
+            );
+          const pick = cands.find(([x, z]) => clear(x, z)) ?? [s.x, s.z];
+          await (window as any).walkTo(pick[0], pick[1]);
+        },
+        [before.x, before.z] as const,
+      );
+    }
+  }
+  expect(staggered).toBe(true);
   await page.screenshot({ path: "test-results/shot.png" });
   await expect
     .poll(async () => {
@@ -560,12 +648,13 @@ test("a gun shove, then a bounce pad flings you at the perch", async ({
   // Nobody dies here: they keep their slot, their name and their footing.
   expect((await state(friend)).y).toBeGreaterThan(0);
   await expect(page.locator("#player-count")).toHaveText("2 / 8");
-  // Drop the gun, then stand on the NE pad and ride it up toward the perch.
+  // Drop the gun, then stand on the centre-slab pad and ride it toward its perch.
   await page.evaluate(() => (window as any).__friendslop.action());
   await expect.poll(async () => (await state(page)).held).toBe(0);
-  await walkTo(page, 3.5, 3.5);
   const launched = await page.evaluate(async () => {
     const d = (window as any).__friendslop;
+    const pad = d.sim.arena.pads.find((p: any) => (p.y ?? 0) === 0);
+    if (pad) await (window as any).walkTo(pad.x, pad.z);
     let maxY = d.state.y;
     const until = performance.now() + 2000;
     while (performance.now() < until) {
