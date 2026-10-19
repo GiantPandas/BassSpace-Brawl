@@ -27,6 +27,8 @@ export type PlayerState = {
   pool: number;
   /** Ticks left on the ballistic flight after the pool spits the player out. */
   launch: number;
+  /** Ticks of raised shield left; zero means no bubble (see COMBAT.blockTicks). */
+  block: number;
 };
 export type PropState = {
   id: number;
@@ -54,8 +56,8 @@ export type Input = {
   pitch: number;
   buttons: number;
 };
-export const BUTTON = { JUMP: 1, SPRINT: 2, CROUCH: 4, DASH: 8 };
-export const VERSION = 5;
+export const BUTTON = { JUMP: 1, SPRINT: 2, CROUCH: 4, DASH: 8, BLOCK: 16 };
+export const VERSION = 6;
 export class Writer {
   buffer = new ArrayBuffer(16384);
   v = new DataView(this.buffer);
@@ -186,7 +188,8 @@ export function encodeSnapshot(s: Snapshot) {
       .u32(p.build)
       .u32(p.ack)
       .u8(Math.max(0, Math.min(255, p.pool)))
-      .u8(Math.max(0, Math.min(255, p.launch)));
+      .u8(Math.max(0, Math.min(255, p.launch)))
+      .u8(Math.max(0, Math.min(255, p.block)));
   for (const p of s.props)
     w.u16(p.id)
       .i16(p.x * 100)
@@ -232,6 +235,7 @@ export function decodeSnapshot(b: ArrayBuffer): Snapshot {
       ack: r.u32(),
       pool: r.u8(),
       launch: r.u8(),
+      block: r.u8(),
     });
   for (let i = 0; i < no; i++)
     props.push({

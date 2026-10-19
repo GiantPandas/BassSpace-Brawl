@@ -26,6 +26,7 @@ test("steps follow grounded travel; jumping sounds once, never from falling or t
     ack: 0,
     pool: 0,
     launch: 0,
+    block: 0,
   };
   movement.update(s, 0);
   for (let i = 1; i <= 20; i++) movement.update({ ...s, x: i * 0.1 }, i * 28);

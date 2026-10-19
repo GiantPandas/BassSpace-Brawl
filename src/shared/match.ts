@@ -24,6 +24,8 @@ export const COMBAT = {
   /** Extra shove a wounded fighter takes, as a fraction of the knock they
    * would get at full HP: 1.0 at full HP, 1 + this at zero. */
   knockRamp: 1,
+  /** Ticks a raised shield stays up after right-click; u8-safe. */
+  blockTicks: 18,
 };
 
 /** Game modes (design doc §13): FFA default, teams, king, chaos. */

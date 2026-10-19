@@ -45,7 +45,7 @@ messages use bounded JSON for inspectability.
 
 | Field                                         | Bytes |
 | --------------------------------------------- | ----: |
-| Version = 4, type = 1, input count (max 8)    |     3 |
+| Version = 6, type = 1, input count (max 8)    |     3 |
 | Acknowledged baseline tick                    |     4 |
 | Repeated: sequence u32                        |     4 |
 | Movement x/z: signed i16 normalized to [-1,1] |     4 |
@@ -55,21 +55,23 @@ messages use bounded JSON for inspectability.
 Two inputs normally travel every 1/30 s. The server caps queued inputs and
 rejects non-finite numbers, invalid lengths, duplicate steps and implausibly
 far-ahead sequence numbers. The fixed server clock determines movement speed.
-The button bits are JUMP = 1, SPRINT = 2, CROUCH = 4 and DASH = 8; the dash
-bit is only meaningful with the air-dash card and fires once per airborne arc
-on the authority.
+The button bits are JUMP = 1, SPRINT = 2, CROUCH = 4, DASH = 8 and BLOCK = 16;
+the dash bit is only meaningful with the air-dash card and fires once per
+airborne arc on the authority. The block bit raises the shield bubble for
+`COMBAT.blockTicks` ticks and the client sends it exactly once per right-click.
 
 ### Snapshots (type 2)
 
 Header: version u8, type u8, full flag u8, server tick u32, baseline tick u32,
 player count u8, changed-prop count u16.
 
-Each player record is 48 bytes: ID u16, position 3×f32, velocity 3×f32,
+Each player record is 49 bytes: ID u16, position 3×f32, velocity 3×f32,
 yaw/pitch 2×i16 scaled by π/32767, state flags u8, held-item ID u16, stagger
 u8, air jumps `jumps` u8, health `hp` u8, eliminated flag `out` u8,
 magazine `ammo` u8, upgrade build `build` u32, acknowledged input sequence
-u32, pool timer `pool` u8, pool launch timer `launch` u8. Flags encode
-grounded, crouched, sprinting, and prior jump-button state for edge-triggered
+u32, pool timer `pool` u8, pool launch timer `launch` u8, shield ticks `block`
+u8. Flags encode grounded, crouched, sprinting, and prior jump-button state
+for edge-triggered
 jumps. Stagger counts the ticks of lost footing left after being struck; while
 it runs the motor keeps only `WEAPON.control` of the player's own steering, so
 the client replays a shove the same way the server applied it. Version 3 added
@@ -83,8 +85,11 @@ Version 5 adds `pool`, the ticks left in the pool basin: falling into the
 yard's pool removes the player from combat (no damage taken or dealt, no
 firing) until the timer runs out and the water spits them out, and `launch`,
 the ticks left on that ballistic flight toward their own spawn. The client
-predicts entry and the flight locally and adopts both timers from each
-snapshot.
+predicts entry and the flight locally and adopts both timers from each snapshot.
+Version 6 adds `block`, the ticks left on the right-click shield bubble: the
+raise comes from an input (one packet per click) and both sides run the same
+motor countdown, so an incoming shot or thrown prop meets the same shield state
+on either side and is deflected back toward its source by the authority.
 
 Each prop record is 18 bytes: ID u16, position 3×i16 in centimeters,
 quaternion 4×i16 scaled by 32767, owner u16 (0 = free). Normalize reconstructed

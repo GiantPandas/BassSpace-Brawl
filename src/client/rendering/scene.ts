@@ -39,6 +39,8 @@ type Avatar = {
   loudness: number;
   speaking: boolean;
   mouth: number;
+  /** The raised-shield bubble, hidden until `block` says it is up. */
+  shield?: THREE.Mesh;
 };
 type PreviewPerformer = {
   avatar: Avatar;
@@ -1228,6 +1230,20 @@ export class GameScene {
     );
     if (this.env === "giant-heads" && avatar.head)
       avatar.head.bone.scale.setScalar(2.6);
+    // The shield is a soap-bubble shell in the player's own colour: no
+    // shadows, no depth writes, so it never occludes the fighter inside.
+    avatar.shield = new THREE.Mesh(
+      new THREE.SphereGeometry(0.82, 28, 18),
+      new THREE.MeshBasicMaterial({
+        color: CHARACTER_PALETTE[color % CHARACTER_PALETTE.length],
+        transparent: true,
+        opacity: 0.24,
+        depthWrite: false,
+      }),
+    );
+    avatar.shield.position.set(0, 0.9, 0);
+    avatar.shield.visible = false;
+    root.add(avatar.shield);
     this.avatars.set(id, avatar);
     this.applyCosmetics(avatar);
     return avatar;
@@ -1519,6 +1535,7 @@ export class GameScene {
     if (a.king) a.king.hidden = this.kingId !== s.id;
     a.root.position.set(s.x, s.y - (s.flags & 2 ? 0.5 : 0.85), s.z);
     a.root.rotation.y = s.yaw + Math.PI;
+    if (a.shield) a.shield.visible = (s.block ?? 0) > 0;
     const speed = Math.hypot(s.vx, s.vz),
       desired = !(s.flags & 1)
         ? "Jump"

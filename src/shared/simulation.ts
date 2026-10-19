@@ -334,6 +334,7 @@ export class Simulation {
       ack: 0,
       pool: 0,
       launch: 0,
+      block: 0,
     };
     const c = { state, body, collider, controller };
     this.players.set(id, c);
@@ -435,6 +436,10 @@ export class Simulation {
     s.vx += (dx - s.vx) * Math.min(1, STEP * steer) * control;
     s.vz += (dz - s.vz) * Math.min(1, STEP * steer) * control;
     if (s.stagger > 0) s.stagger--;
+    // Right-click raises the shield for a breath of ticks; the bubble stays
+    // up that long whether you move or not, and one raise never stacks.
+    if (input.buttons & BUTTON.BLOCK && s.block === 0) s.block = COMBAT.blockTicks;
+    if (s.block > 0) s.block--;
     if (input.buttons & BUTTON.JUMP && !(s.flags & 8) && !crouched) {
       if (s.flags & 1) {
         // Grounded jump: the usual one, plus rocket legs' little bang.
@@ -1375,6 +1380,7 @@ export class Simulation {
         if (!live) return;
         const creator = this.players.get(live.creator)?.state,
           cstats = creator ? buildStats(creator.build) : undefined;
+        let deflect = false;
         if (cstats?.explosive) {
           // A bomb: radial impulse + HP on first contact, then it is gone.
           this.boom(live.body.translation());
@@ -1384,30 +1390,51 @@ export class Simulation {
         if (other?.kind === "player") {
           const s = this.players.get(other.id)?.state;
           if (s && !s.out) {
-            // CCD resolves the hit before events arrive, so read the velocity
-            // the pellet had *before* this step for both direction and damage.
-            const impact = Math.hypot(
-              live.v.x - s.vx,
-              live.v.y - s.vy,
-              live.v.z - s.vz,
-            );
-            const speed = Math.max(0.001, Math.hypot(live.v.x, live.v.y, live.v.z)),
-              mult = cstats?.knockMult ?? 1,
-              hurt = mult * this.knockScale(s.hp);
-            s.vx += (live.v.x / speed) * WEAPON.knock * hurt;
-            s.vz += (live.v.z / speed) * WEAPON.knock * hurt;
-            s.vy = Math.max(s.vy, 0) + WEAPON.lift * hurt;
-            s.stagger = WEAPON.stagger;
-            this.hurt(s, impact);
-            if (cstats?.chainReaction) {
-              // The victim's momentum bleeds into whoever is standing close.
-              for (const p of this.players.values()) {
-                const ps = p.state;
-                if (ps.id === other.id || ps.out) continue;
-                if (Math.hypot(ps.x - s.x, ps.z - s.z) > 2.2) continue;
-                ps.vx += (live.v.x / speed) * WEAPON.knock * mult * 0.4 * this.knockScale(ps.hp);
-                ps.vz += (live.v.z / speed) * WEAPON.knock * mult * 0.4 * this.knockScale(ps.hp);
-                ps.stagger = WEAPON.stagger;
+            if (s.block > 0) {
+              // A raised bubble catches the pellet and throws it straight back
+              // down at its own shooter, same speed, aimed at their eye.
+              const t = live.body.translation(),
+                aimx = (creator?.x ?? t.x - live.v.x) - t.x,
+                aimy = ((creator?.y ?? t.y - live.v.y) + 0.65) - t.y,
+                aimz = (creator?.z ?? t.z - live.v.z) - t.z,
+                len = Math.max(0.001, Math.hypot(aimx, aimy, aimz)),
+                back = live.speed;
+              const backv = {
+                x: (aimx / len) * back,
+                y: (aimy / len) * back,
+                z: (aimz / len) * back,
+              };
+              live.body.setLinvel(backv, true);
+              live.v = live.body.linvel();
+              deflect = true;
+            } else {
+              // CCD resolves the hit before events arrive, so read the velocity
+              // the pellet had *before* this step for both direction and damage.
+              const impact = Math.hypot(
+                live.v.x - s.vx,
+                live.v.y - s.vy,
+                live.v.z - s.vz,
+              );
+              const speed = Math.max(0.001, Math.hypot(live.v.x, live.v.y, live.v.z)),
+                mult = cstats?.knockMult ?? 1,
+                hurt = mult * this.knockScale(s.hp);
+              s.vx += (live.v.x / speed) * WEAPON.knock * hurt;
+              s.vz += (live.v.z / speed) * WEAPON.knock * hurt;
+              s.vy = Math.max(s.vy, 0) + WEAPON.lift * hurt;
+              s.stagger = WEAPON.stagger;
+              this.hurt(s, impact);
+              if (cstats?.chainReaction) {
+                // The victim's momentum bleeds into whoever is standing close.
+                for (const p of this.players.values()) {
+                  const ps = p.state;
+                  if (ps.id === other.id || ps.out) continue;
+                  if (Math.hypot(ps.x - s.x, ps.z - s.z) > 2.2) continue;
+                  ps.vx +=
+                    (live.v.x / speed) * WEAPON.knock * mult * 0.4 * this.knockScale(ps.hp);
+                  ps.vz +=
+                    (live.v.z / speed) * WEAPON.knock * mult * 0.4 * this.knockScale(ps.hp);
+                  ps.stagger = WEAPON.stagger;
+                }
               }
             }
           }
@@ -1431,6 +1458,7 @@ export class Simulation {
           }
         }
         // A surviving pellet keeps flying; a spent one is removed below.
+        if (deflect) return;
         if (cstats?.ricochet) {
           this.ricochet(live);
         } else if (cstats?.bouncy || this.env === "bounce") {
@@ -1466,11 +1494,41 @@ export class Simulation {
           propE = a.kind === "prop" ? a : b,
           meta =
             propE.kind === "prop" ? this.propMeta.get(propE.id) : undefined,
-          tstats = meta ? buildStats(meta.build) : undefined;
-        this.hurt(victim, tstats?.heavyJunk ? rel * 1.8 : rel);
-        if (tstats?.dangerousJunk && rel > COMBAT.threshold) {
-          const p = this.entityPosition(propE);
-          if (p) this.boomAt(p, 2.5, 4, 2, 6);
+          tstats = meta ? buildStats(meta.build) : undefined,
+          thrower = meta ? this.players.get(meta.thrower)?.state : undefined;
+        if (
+          victim.block > 0 &&
+          meta &&
+          thrower &&
+          !thrower.out &&
+          this.owners.get(propE.id) === 0 &&
+          rel > COMBAT.threshold
+        ) {
+          // The bubble bats the thrown thing back at the thrower: same punch
+          // reversed at their chest, plus a pop so it clears out on approach.
+          const body = this.props.get(propE.id);
+          if (body) {
+            const t = body.translation(),
+              aimx = thrower.x - t.x,
+              aimy = thrower.y + 0.6 - t.y,
+              aimz = thrower.z - t.z,
+              len = Math.max(0.001, Math.hypot(aimx, aimy, aimz)),
+              back = Math.min(Math.max(rel, 8), 30);
+            body.setLinvel(
+              {
+                x: (aimx / len) * back,
+                y: (aimy / len) * back + 1.5,
+                z: (aimz / len) * back,
+              },
+              true,
+            );
+          }
+        } else {
+          this.hurt(victim, tstats?.heavyJunk ? rel * 1.8 : rel);
+          if (tstats?.dangerousJunk && rel > COMBAT.threshold) {
+            const p = this.entityPosition(propE);
+            if (p) this.boomAt(p, 2.5, 4, 2, 6);
+          }
         }
       }
     });
@@ -1513,6 +1571,7 @@ export class Simulation {
     s.held = 0;
     s.stagger = 0;
     s.jumps = 0;
+    s.block = 0;
     s.hp = COMBAT.hpMax;
     s.out = 0;
     s.ammo = WEAPON.ammo;

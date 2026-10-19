@@ -58,6 +58,29 @@ test("snapshot and voice packets preserve identity and reject truncated audio", 
   assert.throws(() => readVoice(b.slice(0, -1)));
   sim.dispose();
 });
+test("right-click raises a shield bubble for a few ticks, wire included", () => {
+  const sim = new Simulation(),
+    c = sim.addPlayer(1);
+  let seq = 0;
+  const step = (buttons = 0) => {
+    sim.motor(c, { seq: ++seq, x: 0, z: 0, yaw: 0, pitch: 0, buttons });
+    sim.step();
+  };
+  step(BUTTON.BLOCK);
+  assert.ok(c.state.block > 0, "the raise lands on the tick it was seen");
+  for (let i = 0; i < COMBAT.blockTicks - 1; i++) step();
+  assert.ok(c.state.block === 0, "the bubble drops when its ticks run out");
+  c.state.block = COMBAT.blockTicks;
+  const round = decodeSnapshot(encodeSnapshot({
+    tick: 40,
+    baseline: 40,
+    full: true,
+    players: [c.state],
+    props: sim.propStates(),
+  }));
+  assert.equal(round.players[0].block, COMBAT.blockTicks, "the bubble rides the wire");
+  sim.dispose();
+});
 test("motor settles, walks at fixed speed and jumps on the stage", () => {
   const sim = new Simulation(),
     c = sim.addPlayer(1);
