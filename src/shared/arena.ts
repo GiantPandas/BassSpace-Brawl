@@ -116,27 +116,36 @@ export const buildArena = (seed: string): ArenaLayout => {
   /** Placed platform footprints: {cx, cz, hw, hd, top} for overlap maths. */
   const nodes: { cx: number; cz: number; hw: number; hd: number; top: number }[] = [];
 
-  const clash = (cx: number, cz: number, hw: number, hd: number, top: number) =>
+  /**
+   * Footprints may not overlap at ANY height — platforms never spawn above or
+   * under each other, so nothing hangs over a walkway and sightlines stay
+   * open. `top` stays in the signature because callers think in the
+   * placement they are testing.
+   */
+  const clash = (cx: number, cz: number, hw: number, hd: number, _top: number) =>
     nodes.some(
-      (n) =>
-        Math.abs(cx - n.cx) < hw + n.hw + 0.8 &&
-        Math.abs(cz - n.cz) < hd + n.hd + 0.8 &&
-        Math.abs(top - n.top) < 1.3,
+      (n) => Math.abs(cx - n.cx) < hw + n.hw + 0.8 && Math.abs(cz - n.cz) < hd + n.hd + 0.8,
     );
 
-  // The centre slab: always at the origin, always wide enough for TINY_ARENA.
-  const chw = 4.5 + (r() < 0.5 ? 0 : 1);
-  const chd = 4.5 + (r() < 0.5 ? 0 : 1);
+  // The centre slab: always at the origin, always wide enough for TINY_ARENA,
+  // and wide enough that the opening fight does not feel like a phone booth.
+  const chw = 6.5 + (r() < 0.5 ? 0 : 1);
+  const chd = 6.5 + (r() < 0.5 ? 0 : 1);
   nodes.push({ cx: 0, cz: 0, hw: chw, hd: chd, top: 0 });
   boxes.push({ p: [0, -0.25, 0], s: [chw * 2, 0.5, chd * 2], color: "#4b5563", kind: "stage" });
 
+  const nearSpawn = (x: number, z: number, pad = 1.6) =>
+    spawns.some((s) => Math.hypot(s[0] - x, s[2] - z) < pad);
+  const nearPad = (x: number, z: number, pad = 1.4) =>
+    pads.some((p) => Math.hypot(p.x - x, p.z - z) < pad);
+
   const attach = (parent: number) => {
     const n = nodes[parent];
-    for (let attempt = 0; attempt < 12; attempt++) {
+    for (let attempt = 0; attempt < 16; attempt++) {
       const [dx, dz] = DIRS[Math.floor(r() * DIRS.length)];
-      const hw = 1.5 + Math.floor(r() * 4) * 0.5;
-      const hd = 1.5 + Math.floor(r() * 4) * 0.5;
-      const gap = 0.3 + r();
+      const hw = 2.5 + Math.floor(r() * 4) * 0.75;
+      const hd = 2.5 + Math.floor(r() * 4) * 0.75;
+      const gap = 0.4 + r() * 1.1;
       const cx = n.cx + dx * (n.hw + hw + gap) + (dx ? 0 : (r() * 2 - 1) * (n.hw + hw - 1.2));
       const cz = n.cz + dz * (n.hd + hd + gap) + (dz ? 0 : (r() * 2 - 1) * (n.hd + hd - 1.2));
       const top = Math.max(-2.4, Math.min(2.4, n.top + HEIGHTS[Math.floor(r() * HEIGHTS.length)]));
@@ -148,65 +157,25 @@ export const buildArena = (seed: string): ArenaLayout => {
     return false;
   };
 
-  // A ring of satellites on the centre, then shorter branches off the ring.
-  const satellites = 5 + Math.floor(r() * 2);
-  for (let i = 0; i < satellites; i++) attach(0);
-  const branches = 3 + Math.floor(r() * 3);
-  for (let i = 0; i < branches; i++) attach(1 + Math.floor(r() * Math.max(1, nodes.length - 1)));
-
-  // Eight spawns on the widest, safest ground: centre slab twice, then one
-  // per remaining platform, filling with large platforms if it runs short.
-  const roomy = nodes
-    .map((n, i) => ({ n, i }))
-    .sort((a, b) => b.n.hw * b.n.hd - a.n.hw * a.n.hd)
-    .filter((x) => x.n.hw >= 2.4 && x.n.hd >= 2.4 && x.n.top <= 2.4 - 1.9);
-  const at = (n: { cx: number; cz: number; hw: number; hd: number; top: number }): Spawn => [
-    n.cx + (r() * 2 - 1) * Math.max(0, n.hw - 1.4),
-    n.top + 1,
-    n.cz + (r() * 2 - 1) * Math.max(0, n.hd - 1.4),
-  ];
-  for (let i = 0; i < 2 && spawns.length < 8; i++) {
-    const c = nodes[0];
-    spawns.push([c.cx + (i ? 1 : -1) * (c.hw * 0.45), 1, c.cz + (i ? 1 : -1) * (c.hd * 0.45)]);
-  }
-  for (const room of roomy) {
-    if (spawns.length >= 8) break;
-    if (room.i === 0) continue;
-    spawns.push(at(room.n));
-  }
-  for (let i = 0; spawns.length < 8 && i < 16; i++) {
-    const n = nodes[(i + 1) % nodes.length];
-    if (n.hw < 2.4 || n.hd < 2.4) continue;
-    spawns.push(at(n));
-  }
-  while (spawns.length < 8) {
-    const c = nodes[0];
-    spawns.push([c.cx + (r() * 2 - 1) * (c.hw - 1.4), 1, c.cz + (r() * 2 - 1) * (c.hd - 1.4)]);
-  }
-
-  const nearSpawn = (x: number, z: number, pad = 1.6) =>
-    spawns.some((s) => Math.hypot(s[0] - x, s[2] - z) < pad);
-  const nearPad = (x: number, z: number, pad = 1.4) =>
-    pads.some((p) => Math.hypot(p.x - x, p.z - z) < pad);
-
   // One or two perches, each paired with a bounce pad aimed at it from its
-  // parent — same launch numbers the hand-built Stage uses. Pads are purely
-  // triggers like the Stage's: the coil is drawn in scene.ts, and no collider
-  // sits on the floor to snag a walker. Pads also stay clear of spawns, or a
-  // player would materialise already airborne off the trigger.
+  // parent — same launch numbers the hand-built Stage uses. Placed BEFORE the
+  // satellite ring so platforms dodge perches, never the other way round:
+  // with footprints that may not overlap at all, the perch corridor is scarce
+  // and satellites would otherwise eat it. Both perches hang off the centre
+  // slab, which also keeps a pad you can reach by walking on it. Pads are
+  // purely triggers like the Stage's: the coil is drawn in scene.ts, and no
+  // collider sits on the floor to snag a walker. Pads also stay clear of
+  // spawns, or a player would materialise already airborne off the trigger.
   for (let i = 0, tries = 0; i < 1 + Math.floor(r() * 2) && tries < 10; i++, tries++) {
-    if (nodes.length < 2) break;
-    // First perch always hangs off the centre slab so every arena has a
-    // pad you can reach by walking; later ones may ride any satellite.
-    const n = i === 0 ? nodes[0] : nodes[1 + Math.floor(r() * (nodes.length - 1))];
+    const n = nodes[0];
     if (n.hw < 2.4 || n.hd < 2.4) continue;
     const [dx, dz] = DIRS[Math.floor(r() * DIRS.length)];
     // Same geometry as the hand-built Stage: the pad sits 1.5 m inside its
     // parent's edge, the perch centre 3 m beyond it, 2 m up, launch 5+5+9.
     const px = n.cx + dx * (n.hw + 3),
       pz = n.cz + dz * (n.hd + 3);
-    const phw = 1.3 + r() * 0.4,
-      phd = 1.3 + r() * 0.4,
+    const phw = 1.5 + r() * 0.5,
+      phd = 1.5 + r() * 0.5,
       ptop = Math.min(2.4, n.top + 2);
     const padX = n.cx + dx * (n.hw - 1.5),
       padZ = n.cz + dz * (n.hd - 1.5);
@@ -221,6 +190,64 @@ export const buildArena = (seed: string): ArenaLayout => {
     pads.push({ x: padX, z: padZ, r: 0.8, y: n.top, vx: dx * 5, vz: dz * 5, bounce: 9 });
     nodes.push({ cx: px, cz: pz, hw: phw, hd: phd, top: ptop });
     boxes.push({ p: [px, ptop - 0.25, pz], s: [phw * 2, 0.5, phd * 2], color: "#6d4f8f", kind: "perch" });
+  }
+
+  // A ring of satellites on the centre, then shorter branches off the ring.
+  const satellites = 6 + Math.floor(r() * 3);
+  for (let i = 0; i < satellites; i++) attach(0);
+  const branches = 4 + Math.floor(r() * 4);
+  for (let i = 0; i < branches; i++) attach(1 + Math.floor(r() * Math.max(1, nodes.length - 1)));
+
+  // Eight spawns on the widest, safest ground: centre slab twice, then one
+  // per remaining platform, filling with large platforms if it runs short.
+  const roomy = nodes
+    .map((n, i) => ({ n, i }))
+    .sort((a, b) => b.n.hw * b.n.hd - a.n.hw * a.n.hd)
+    .filter((x) => x.n.hw >= 2.4 && x.n.hd >= 2.4 && x.n.top <= 2.4 - 1.9);
+  const at = (n: { cx: number; cz: number; hw: number; hd: number; top: number }): Spawn => [
+    n.cx + (r() * 2 - 1) * Math.max(0, n.hw - 1.4),
+    n.top + 1,
+    n.cz + (r() * 2 - 1) * Math.max(0, n.hd - 1.4),
+  ];
+  // Two spawns on the centre slab, on the pair of opposite corners farthest
+  // from the perch pads placed above, so nobody materialises on a trigger.
+  const c = nodes[0];
+  const cornerClear = (sx: number, sz: number) =>
+    Math.min(...pads.map((p) => Math.hypot(p.x - sx * c.hw * 0.45, p.z - sz * c.hd * 0.45)));
+  const pairs = [[[1, 1], [-1, -1]], [[1, -1], [-1, 1]]];
+  const pair =
+    Math.min(...pairs[0].map((s) => cornerClear(s[0], s[1]))) >=
+    Math.min(...pairs[1].map((s) => cornerClear(s[0], s[1])))
+      ? pairs[0]
+      : pairs[1];
+  for (const [sx, sz] of pair)
+    if (spawns.length < 8) spawns.push([c.cx + sx * c.hw * 0.45, 1, c.cz + sz * c.hd * 0.45]);
+  for (const room of roomy) {
+    if (spawns.length >= 8) break;
+    if (room.i === 0) continue;
+    spawns.push(at(room.n));
+  }
+  for (let i = 0; spawns.length < 8 && i < 16; i++) {
+    const n = nodes[(i + 1) % nodes.length];
+    if (n.hw < 2.4 || n.hd < 2.4) continue;
+    let sp = at(n);
+    for (let tries = 0; tries < 8 && nearPad(sp[0], sp[2], 1.5); tries++) sp = at(n);
+    spawns.push(sp);
+  }
+  while (spawns.length < 8) {
+    const c = nodes[0];
+    let sp: Spawn = [
+      c.cx + (r() * 2 - 1) * (c.hw - 1.4),
+      1,
+      c.cz + (r() * 2 - 1) * (c.hd - 1.4),
+    ];
+    for (let tries = 0; tries < 12 && nearPad(sp[0], sp[2], 1.5); tries++)
+      sp = [
+        c.cx + (r() * 2 - 1) * (c.hw - 1.4),
+        1,
+        c.cz + (r() * 2 - 1) * (c.hd - 1.4),
+      ];
+    spawns.push(sp);
   }
 
   // A pad on every platform: nothing dead-ends. The perch pass above paired
@@ -261,12 +288,31 @@ export const buildArena = (seed: string): ArenaLayout => {
       pads.push({ x: jx, z: jz, r: 0.8, y: n.top, vx, vz, bounce: 9 });
       placed = true;
     }
-    if (!placed)
-      pads.push(
-        i === 0
-          ? { x: n.cx, z: n.cz, r: 0.8, y: n.top, vx: 0, vz: 0, bounce: 11 }
-          : { x: n.cx, z: n.cz, r: 0.8, y: n.top, vx, vz, bounce: 9 },
+    if (!placed && i === 0)
+      pads.push({ x: n.cx, z: n.cz, r: 0.8, y: n.top, vx: 0, vz: 0, bounce: 11 });
+    else if (!placed) {
+      // Last-resort pad takes the platform corner farthest from every spawn,
+      // so no player materialises on the trigger.
+      const bx = n.hw - 1.2,
+        bz = n.hd - 1.2;
+      const spots = [[bx, bz], [bx, -bz], [-bx, bz], [-bx, -bz]];
+      const clear = (x: number, z: number) =>
+        Math.min(...spawns.map((s) => Math.hypot(s[0] - x, s[2] - z)));
+      const best = spots.reduce(
+        (a, b) =>
+          clear(n.cx + b[0], n.cz + b[1]) > clear(n.cx + a[0], n.cz + a[1]) ? b : a,
+        spots[0],
       );
+      pads.push({
+        x: n.cx + best[0],
+        z: n.cz + best[1],
+        r: 0.8,
+        y: n.top,
+        vx,
+        vz,
+        bounce: 9,
+      });
+    }
   }
 
   // Cover walls on the big lower platforms: waist-high, vaultable, never

@@ -21,6 +21,9 @@ export const COMBAT = {
   /** Damage per m/s of excess, capped at `maxPerHit` per contact event. */
   damagePerUnit: 3,
   maxPerHit: 30,
+  /** Extra shove a wounded fighter takes, as a fraction of the knock they
+   * would get at full HP: 1.0 at full HP, 1 + this at zero. */
+  knockRamp: 1,
 };
 
 /** Game modes (design doc §13): FFA default, teams, king, chaos. */

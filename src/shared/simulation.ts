@@ -843,9 +843,11 @@ export class Simulation {
       struck = this.players.get(victim),
       mult = buildStats(s.build).knockMult;
     if (struck) {
-      struck.state.vx += d.x * MELEE.knock * mult;
-      struck.state.vz += d.z * MELEE.knock * mult;
-      struck.state.vy = Math.max(struck.state.vy, 0) + MELEE.lift * mult;
+      // The victim's own wound decides how far they fly.
+      const hurt = mult * this.knockScale(struck.state.hp);
+      struck.state.vx += d.x * MELEE.knock * hurt;
+      struck.state.vz += d.z * MELEE.knock * hurt;
+      struck.state.vy = Math.max(struck.state.vy, 0) + MELEE.lift * hurt;
       struck.state.stagger = MELEE.stagger;
     }
     s.vx -= d.x * MELEE.recoil;
@@ -1157,6 +1159,15 @@ export class Simulation {
     if (!s.hp) s.out = 1;
   }
   /** EXPLOSIVE: radial shove + lift + HP to everyone in range of the blast. */
+  /**
+   * How hard a fighter receives a shove, scaled by the HP they have lost:
+   * 1.0 at full health, up to 1 + COMBAT.knockRamp at death's door. Applied
+   * to every knockback a player receives; `hp` is replicated, so a client's
+   * deterministic replay scales identically.
+   */
+  private knockScale(hp: number) {
+    return 1 + ((COMBAT.hpMax - Math.max(0, hp)) / COMBAT.hpMax) * COMBAT.knockRamp;
+  }
   private boom(t: { x: number; y: number; z: number }) {
     this.boomAt(t, WEAPON.boomRadius, WEAPON.boomForce, WEAPON.boomLift, WEAPON.boomDamage);
   }
@@ -1176,11 +1187,13 @@ export class Simulation {
         dist = Math.hypot(dxp, dzp);
       if (dist > radius || Math.abs(ps.y - t.y) > 3) continue;
       const fall = Math.max(0.2, 1 - dist / radius);
+      // The blast shoves the wounded harder, too.
+      const shove = fall * this.knockScale(ps.hp);
       if (dist > 0.001) {
-        ps.vx += (dxp / dist) * force * fall;
-        ps.vz += (dzp / dist) * force * fall;
+        ps.vx += (dxp / dist) * force * shove;
+        ps.vz += (dzp / dist) * force * shove;
       }
-      ps.vy = Math.max(ps.vy, 0) + lift * fall;
+      ps.vy = Math.max(ps.vy, 0) + lift * shove;
       ps.stagger = WEAPON.stagger;
       const dmg = damage * fall;
       ps.hp = Math.max(0, ps.hp - dmg);
@@ -1379,10 +1392,11 @@ export class Simulation {
               live.v.z - s.vz,
             );
             const speed = Math.max(0.001, Math.hypot(live.v.x, live.v.y, live.v.z)),
-              mult = cstats?.knockMult ?? 1;
-            s.vx += (live.v.x / speed) * WEAPON.knock * mult;
-            s.vz += (live.v.z / speed) * WEAPON.knock * mult;
-            s.vy = Math.max(s.vy, 0) + WEAPON.lift * mult;
+              mult = cstats?.knockMult ?? 1,
+              hurt = mult * this.knockScale(s.hp);
+            s.vx += (live.v.x / speed) * WEAPON.knock * hurt;
+            s.vz += (live.v.z / speed) * WEAPON.knock * hurt;
+            s.vy = Math.max(s.vy, 0) + WEAPON.lift * hurt;
             s.stagger = WEAPON.stagger;
             this.hurt(s, impact);
             if (cstats?.chainReaction) {
@@ -1391,8 +1405,8 @@ export class Simulation {
                 const ps = p.state;
                 if (ps.id === other.id || ps.out) continue;
                 if (Math.hypot(ps.x - s.x, ps.z - s.z) > 2.2) continue;
-                ps.vx += (live.v.x / speed) * WEAPON.knock * mult * 0.4;
-                ps.vz += (live.v.z / speed) * WEAPON.knock * mult * 0.4;
+                ps.vx += (live.v.x / speed) * WEAPON.knock * mult * 0.4 * this.knockScale(ps.hp);
+                ps.vz += (live.v.z / speed) * WEAPON.knock * mult * 0.4 * this.knockScale(ps.hp);
                 ps.stagger = WEAPON.stagger;
               }
             }
@@ -1408,10 +1422,11 @@ export class Simulation {
               dzp = ps.z - t.z,
               dist = Math.hypot(dxp, dzp);
             if (dist > 2.5 || Math.abs(ps.y - t.y) > 3) continue;
-            const inv = dist < 0.001 ? 0 : 1 / dist;
-            ps.vx += dxp * inv * 6;
-            ps.vz += dzp * inv * 6;
-            ps.vy = Math.max(ps.vy, 0) + 2;
+            const inv = dist < 0.001 ? 0 : 1 / dist,
+              hurt = 6 * this.knockScale(ps.hp);
+            ps.vx += dxp * inv * hurt;
+            ps.vz += dzp * inv * hurt;
+            ps.vy = Math.max(ps.vy, 0) + 2 * this.knockScale(ps.hp);
             ps.stagger = WEAPON.stagger;
           }
         }
