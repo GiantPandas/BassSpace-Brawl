@@ -335,6 +335,7 @@ export class Simulation {
       pool: 0,
       launch: 0,
       block: 0,
+      cool: 0,
     };
     const c = { state, body, collider, controller };
     this.players.set(id, c);
@@ -438,8 +439,12 @@ export class Simulation {
     if (s.stagger > 0) s.stagger--;
     // Right-click raises the shield for a breath of ticks; the bubble stays
     // up that long whether you move or not, and one raise never stacks.
-    if (input.buttons & BUTTON.BLOCK && s.block === 0) s.block = COMBAT.blockTicks;
+    if (input.buttons & BUTTON.BLOCK && s.cool === 0) {
+      s.block = COMBAT.blockTicks;
+      s.cool = COMBAT.blockCooldown;
+    }
     if (s.block > 0) s.block--;
+    if (s.cool > 0) s.cool--;
     if (input.buttons & BUTTON.JUMP && !(s.flags & 8) && !crouched) {
       if (s.flags & 1) {
         // Grounded jump: the usual one, plus rocket legs' little bang.
@@ -1572,6 +1577,7 @@ export class Simulation {
     s.stagger = 0;
     s.jumps = 0;
     s.block = 0;
+    s.cool = 0;
     s.hp = COMBAT.hpMax;
     s.out = 0;
     s.ammo = WEAPON.ammo;

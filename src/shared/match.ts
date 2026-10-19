@@ -26,6 +26,9 @@ export const COMBAT = {
   knockRamp: 1,
   /** Ticks a raised shield stays up after right-click; u8-safe. */
   blockTicks: 18,
+  /** Ticks between shield raises — 4 s; u8-safe. Future upgrade-card packs
+   * will scale this gate through buildStats the way knockback cards do. */
+  blockCooldown: 240,
 };
 
 /** Game modes (design doc §13): FFA default, teams, king, chaos. */

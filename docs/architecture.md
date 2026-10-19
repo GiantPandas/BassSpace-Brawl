@@ -45,7 +45,7 @@ messages use bounded JSON for inspectability.
 
 | Field                                         | Bytes |
 | --------------------------------------------- | ----: |
-| Version = 6, type = 1, input count (max 8)    |     3 |
+| Version = 7, type = 1, input count (max 8)    |     3 |
 | Acknowledged baseline tick                    |     4 |
 | Repeated: sequence u32                        |     4 |
 | Movement x/z: signed i16 normalized to [-1,1] |     4 |
@@ -65,12 +65,12 @@ airborne arc on the authority. The block bit raises the shield bubble for
 Header: version u8, type u8, full flag u8, server tick u32, baseline tick u32,
 player count u8, changed-prop count u16.
 
-Each player record is 49 bytes: ID u16, position 3×f32, velocity 3×f32,
+Each player record is 50 bytes: ID u16, position 3×f32, velocity 3×f32,
 yaw/pitch 2×i16 scaled by π/32767, state flags u8, held-item ID u16, stagger
 u8, air jumps `jumps` u8, health `hp` u8, eliminated flag `out` u8,
 magazine `ammo` u8, upgrade build `build` u32, acknowledged input sequence
 u32, pool timer `pool` u8, pool launch timer `launch` u8, shield ticks `block`
-u8. Flags encode grounded, crouched, sprinting, and prior jump-button state
+u8, shield cooldown `cool` u8. Flags encode grounded, crouched, sprinting, and prior jump-button state
 for edge-triggered
 jumps. Stagger counts the ticks of lost footing left after being struck; while
 it runs the motor keeps only `WEAPON.control` of the player's own steering, so
@@ -89,7 +89,10 @@ predicts entry and the flight locally and adopts both timers from each snapshot.
 Version 6 adds `block`, the ticks left on the right-click shield bubble: the
 raise comes from an input (one packet per click) and both sides run the same
 motor countdown, so an incoming shot or thrown prop meets the same shield state
-on either side and is deflected back toward its source by the authority.
+on either side and is deflected back toward its source by the authority. Version
+7 adds `cool`, the ticks left before the next raise: the raise also starts it,
+both sides run the same motor countdown, and a raise seen while `cool` runs is
+ignored, so client and authority agree on when the next bubble may go up.
 
 Each prop record is 18 bytes: ID u16, position 3×i16 in centimeters,
 quaternion 4×i16 scaled by 32767, owner u16 (0 = free). Normalize reconstructed

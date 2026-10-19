@@ -29,6 +29,8 @@ export type PlayerState = {
   launch: number;
   /** Ticks of raised shield left; zero means no bubble (see COMBAT.blockTicks). */
   block: number;
+  /** Ticks left until the shield may be raised again (see COMBAT.blockCooldown). */
+  cool: number;
 };
 export type PropState = {
   id: number;
@@ -57,7 +59,7 @@ export type Input = {
   buttons: number;
 };
 export const BUTTON = { JUMP: 1, SPRINT: 2, CROUCH: 4, DASH: 8, BLOCK: 16 };
-export const VERSION = 6;
+export const VERSION = 7;
 export class Writer {
   buffer = new ArrayBuffer(16384);
   v = new DataView(this.buffer);
@@ -189,7 +191,8 @@ export function encodeSnapshot(s: Snapshot) {
       .u32(p.ack)
       .u8(Math.max(0, Math.min(255, p.pool)))
       .u8(Math.max(0, Math.min(255, p.launch)))
-      .u8(Math.max(0, Math.min(255, p.block)));
+      .u8(Math.max(0, Math.min(255, p.block)))
+      .u8(Math.max(0, Math.min(255, p.cool)));
   for (const p of s.props)
     w.u16(p.id)
       .i16(p.x * 100)
@@ -236,6 +239,7 @@ export function decodeSnapshot(b: ArrayBuffer): Snapshot {
       pool: r.u8(),
       launch: r.u8(),
       block: r.u8(),
+      cool: r.u8(),
     });
   for (let i = 0; i < no; i++)
     props.push({

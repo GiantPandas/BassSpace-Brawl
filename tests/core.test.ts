@@ -58,7 +58,7 @@ test("snapshot and voice packets preserve identity and reject truncated audio", 
   assert.throws(() => readVoice(b.slice(0, -1)));
   sim.dispose();
 });
-test("right-click raises a shield bubble for a few ticks, wire included", () => {
+test("right-click raises a shield bubble, gated by a four second cooldown", () => {
   const sim = new Simulation(),
     c = sim.addPlayer(1);
   let seq = 0;
@@ -67,10 +67,17 @@ test("right-click raises a shield bubble for a few ticks, wire included", () => 
     sim.step();
   };
   step(BUTTON.BLOCK);
-  assert.ok(c.state.block > 0, "the raise lands on the tick it was seen");
+  assert.ok(c.state.block > 0 && c.state.cool > 0, "the raise lands and starts the cooldown");
   for (let i = 0; i < COMBAT.blockTicks - 1; i++) step();
   assert.ok(c.state.block === 0, "the bubble drops when its ticks run out");
+  step(BUTTON.BLOCK);
+  assert.ok(c.state.block === 0, "a raise during cooldown is ignored");
+  for (let i = 0; i < COMBAT.blockCooldown - COMBAT.blockTicks; i++) step();
+  assert.ok(c.state.cool === 0, "the cooldown expires tick by tick");
+  step(BUTTON.BLOCK);
+  assert.ok(c.state.block > 0, "the next raise lands once the cooldown is up");
   c.state.block = COMBAT.blockTicks;
+  c.state.cool = COMBAT.blockCooldown;
   const round = decodeSnapshot(encodeSnapshot({
     tick: 40,
     baseline: 40,
@@ -79,6 +86,7 @@ test("right-click raises a shield bubble for a few ticks, wire included", () => 
     props: sim.propStates(),
   }));
   assert.equal(round.players[0].block, COMBAT.blockTicks, "the bubble rides the wire");
+  assert.equal(round.players[0].cool, COMBAT.blockCooldown, "and so does the cooldown");
   sim.dispose();
 });
 test("motor settles, walks at fixed speed and jumps on the stage", () => {
