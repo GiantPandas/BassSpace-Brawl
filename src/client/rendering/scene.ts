@@ -1113,6 +1113,7 @@ export class GameScene {
     const root = new THREE.Group();
     const character = this.asset ? clone(this.asset.scene) : new THREE.Group();
     character.traverse((o) => {
+      if (o.name === "Belt") o.scale.set(0.82, 1, 0.82);
       if (o instanceof THREE.Mesh) {
         o.castShadow = true;
         o.receiveShadow = true;
@@ -1128,8 +1129,8 @@ export class GameScene {
             baseColor.getHSL(hsl);
             copy.color.setHSL(
               hsl.h,
-              1.0,
-              Math.min(0.85, hsl.l * 1.25 + 0.1),
+              hsl.s * 0.45,
+              hsl.l * 0.78,
             );
             copy.roughness = 0.5;
           } else if (m.name.startsWith("Mouth")) {
@@ -1141,6 +1142,23 @@ export class GameScene {
               0.48,
             );
             copy.roughness = 0.5;
+          } else if (m.name.startsWith("Trim")) {
+            // Gear trim stays a designed charcoal across every skin: rubbery,
+            // never flat black plastic.
+            copy.color.set("#1d2128");
+            copy.roughness = 0.55;
+            copy.metalness = 0.12;
+          } else if (m.name.startsWith("Buckle")) {
+            // Hardware reads as polished brass so the rig picks up the sun.
+            copy.color.set("#c9a227");
+            copy.roughness = 0.24;
+            copy.metalness = 0.85;
+          } else if (m.name.startsWith("EyeWhite")) {
+            copy.color.set("#fffdf4");
+            copy.roughness = 0.3;
+          } else if (m.name.startsWith("EyePupil")) {
+            copy.color.set("#0b0d11");
+            copy.roughness = 0.22;
           }
           return copy;
         });
@@ -1258,8 +1276,8 @@ export class GameScene {
             base.getHSL(hsl);
             mat.color.setHSL(
               hsl.h,
-              1.0,
-              Math.min(0.85, hsl.l * 1.25 + 0.1),
+              hsl.s * 0.45,
+              hsl.l * 0.78,
             );
           }
         } else if (n.startsWith("Mouth")) {

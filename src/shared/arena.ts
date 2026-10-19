@@ -187,7 +187,7 @@ export const buildArena = (seed: string): ArenaLayout => {
       i--;
       continue;
     }
-    pads.push({ x: padX, z: padZ, r: 0.8, y: n.top, vx: dx * 5, vz: dz * 5, bounce: 9 });
+    pads.push({ x: padX, z: padZ, r: 0.8, y: n.top, vx: dx * 5, vz: dz * 5, bounce: 12 });
     nodes.push({ cx: px, cz: pz, hw: phw, hd: phd, top: ptop });
     boxes.push({ p: [px, ptop - 0.25, pz], s: [phw * 2, 0.5, phd * 2], color: "#6d4f8f", kind: "perch" });
   }
@@ -285,11 +285,11 @@ export const buildArena = (seed: string): ArenaLayout => {
         }
       }
       if (nearSpawn(jx, jz, 1.8) || nearPad(jx, jz, 1.5)) continue;
-      pads.push({ x: jx, z: jz, r: 0.8, y: n.top, vx, vz, bounce: 9 });
+      pads.push({ x: jx, z: jz, r: 0.8, y: n.top, vx, vz, bounce: 12 });
       placed = true;
     }
     if (!placed && i === 0)
-      pads.push({ x: n.cx, z: n.cz, r: 0.8, y: n.top, vx: 0, vz: 0, bounce: 11 });
+      pads.push({ x: n.cx, z: n.cz, r: 0.8, y: n.top, vx: 0, vz: 0, bounce: 14 });
     else if (!placed) {
       // Last-resort pad takes the platform corner farthest from every spawn,
       // so no player materialises on the trigger.
@@ -310,7 +310,7 @@ export const buildArena = (seed: string): ArenaLayout => {
         y: n.top,
         vx,
         vz,
-        bounce: 9,
+        bounce: 12,
       });
     }
   }

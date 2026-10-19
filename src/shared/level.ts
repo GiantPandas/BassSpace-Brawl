@@ -120,19 +120,19 @@ export type Pad = {
   bounce: number;
 };
 export const PADS: Pad[] = [
-  { x: 3.5, z: 3.5, r: 0.8, vx: 5, vz: 5, bounce: 9 },
-  { x: -3.5, z: -3.5, r: 0.8, vx: -5, vz: -5, bounce: 9 },
+  { x: 3.5, z: 3.5, r: 0.8, vx: 5, vz: 5, bounce: 12 },
+  { x: -3.5, z: -3.5, r: 0.8, vx: -5, vz: -5, bounce: 12 },
   // Satellite return pads hug the outer edge so a respawn at the SPAWN above
   // the centre never materialises standing on the trigger.
-  { x: 10, z: 0, y: 0, r: 0.8, vx: -5, vz: 0, bounce: 9 },
-  { x: -10, z: 0, y: 0, r: 0.8, vx: 5, vz: 0, bounce: 9 },
-  { x: 0, z: 10, y: 0, r: 0.8, vx: 0, vz: -5, bounce: 9 },
-  { x: 0, z: -10, y: 0, r: 0.8, vx: 0, vz: 5, bounce: 9 },
+  { x: 10, z: 0, y: 0, r: 0.8, vx: -5, vz: 0, bounce: 12 },
+  { x: -10, z: 0, y: 0, r: 0.8, vx: 5, vz: 0, bounce: 12 },
+  { x: 0, z: 10, y: 0, r: 0.8, vx: 0, vz: -5, bounce: 12 },
+  { x: 0, z: -10, y: 0, r: 0.8, vx: 0, vz: 5, bounce: 12 },
   // Perch return pads, aimed back at the centre slab, one on each perch.
-  { x: 8, z: 8, y: 2, r: 0.8, vx: -3.5, vz: -3.5, bounce: 9 },
-  { x: -8, z: -8, y: 2, r: 0.8, vx: 3.5, vz: 3.5, bounce: 9 },
-  { x: 8, z: -8, y: 2, r: 0.8, vx: -3.5, vz: 3.5, bounce: 9 },
-  { x: -8, z: 8, y: 2, r: 0.8, vx: 3.5, vz: -3.5, bounce: 9 },
+  { x: 8, z: 8, y: 2, r: 0.8, vx: -3.5, vz: -3.5, bounce: 12 },
+  { x: -8, z: -8, y: 2, r: 0.8, vx: 3.5, vz: 3.5, bounce: 12 },
+  { x: 8, z: -8, y: 2, r: 0.8, vx: -3.5, vz: 3.5, bounce: 12 },
+  { x: -8, z: 8, y: 2, r: 0.8, vx: 3.5, vz: -3.5, bounce: 12 },
 ];
 
 export const PALETTE = [
@@ -146,14 +146,14 @@ export const PALETTE = [
   "#c78fa0",
 ];
 export const CHARACTER_PALETTE = [
-  "#ff9d00",
-  "#32d41e",
-  "#ff283b",
-  "#00b2ff",
-  "#a036ff",
-  "#ffd800",
-  "#00deb0",
-  "#ff288f",
+  "#ff8f1f", // flare orange
+  "#2fd066", // field green
+  "#ef3b46", // crimson
+  "#23a7ff", // azure
+  "#a25ae0", // royal violet
+  "#ffd21f", // sun yellow
+  "#19c9a6", // reef teal
+  "#f24596", // punch pink
 ];
 export const STEP = 1 / 60;
 export const MAX_PLAYERS = 8;
