@@ -94,16 +94,17 @@ src/
     audio/codec.worker.ts     Opus encode/decode (WebCodecs probe, libopus-wasm fallback)
 public/
   favicon.svg                 Brand mark (same paths are inlined in the topbar)
-  models/common-worker.glb    Generated character. Never hand-edit; regenerate.
+  models/yellow_visor_mascot.glb Generated bare-head low-poly mascot Frank. Never hand-edit; regenerate.
   audio/room.wav, hall.wav    Generated impulse responses
   fonts/                      Self-hosted DM Sans + Space Grotesk
 assets-source/
-  blender/common-worker.blend Generated Blender source of the character
+  blender/yellow_visor_mascot.blend Generated Blender source of the mascot
   README.md                   Rig contract (bones, materials, which bones the runtime owns)
 tools/
   dev.ts                      Dev server: Vite middleware + app on one port, in-process restarts
   bots.ts                     Headless protocol clients (load test / second player)
-  generate-assets.py          Blender script that builds and exports the character
+  generate-assets.py          Blender script that builds and exports the mascot
+  preview-character.py        Renders the 11 reference views into artifacts/character-previews/vN/
   generate-ir.py              Synthesises the impulse responses (pure Python)
 tests/
   core.test.ts                Protocol round trips, motor, ownership, Opus, acoustics (node:test)
@@ -310,7 +311,7 @@ you are in.
 | Add a player action | `app.ts` `msg.type === "action"` → validate with server state → mutate `Simulation`; client trigger in `main.ts`; visual in `scene.ts` | Clients never decide ownership or authoritative position. Dedupe by `request`. |
 | Add replicated state | `protocol.ts` writer **and** reader, `PlayerState`/`PropState`, tests in `core.test.ts`, tables in `docs/architecture.md` | Bump `VERSION` for incompatible layouts. Keep membership/control out of the tick. Respect the fixed record sizes and ±327.67 m prop range. |
 | Change how remote players look or animate | `scene.ts` `avatar()`, `updatePlayer()`, `render()` | Runtime-owned bones: section 7. |
-| Change the character mesh or rig | `tools/generate-assets.py` → regenerate → commit `.glb` **and** `.blend` | Keep the clip names, `Jacket / tintable`, and the bone names, or update `scene.ts` with them. |
+| Change the character mesh or rig | `tools/generate-assets.py` → regenerate → commit `.glb` **and** `.blend` | Keep the clip names, `Jacket / tintable`, `BodyColor / tintable`, and the bone names, or update `scene.ts` with them. |
 | Change voice range / acoustics | `VOICE` in `level.ts`; `REVERB_REGIONS` in `acoustics.ts`; graph in `spatial.ts`; IRs via `tools/generate-ir.py` | Regions are axis-aligned boxes that blend across `blendWidth`. |
 | Change voice transport behaviour | `voice.ts` state machine, `app.ts` `pair()/route()/route-request` | Both endpoints must confirm before an upgrade. Read `docs/voice.md` first. |
 | Change UI copy, HUD, drawers | The template string at the top of `main.ts`; `style.css` | Ids like `#room-code`, `#hud`, `#loading`, button names are used by the Playwright tests — keep them or update the tests. |
@@ -332,6 +333,14 @@ Rules the code depends on:
 
 - **Bone names contain no `.`.** The glTF exporter strips dots (`arm.L` became
   `armL`), which silently broke `getObjectByName("arm.L")` for a long time.
+- **The head is bare; hats are runtime cosmetics.** The GLB ships a bare sphere
+  head (`0.66` cube, dome top `z 1.97`) with no headwear — crown pieces are gone,
+  and there is no mouth geometry: a strip laid on the sphere read as a line
+  floating over the face. `Socket_Hat`, an empty parented to the `head` bone on the
+  dome at `(0,-.02,1.965)`, is exported in the GLB; `scene.ts` parents every hat
+  group to it (`getObjectByName("Socket_Hat")`), so hats ride the head. Hat bases
+  are authored 0.05–0.10 below the socket origin. The head half `Cranium` rides the
+  `jaw` bone, so the head tilt carries the face; eyes and nose follow.
 - **`head` and `jaw` are never keyframed** in the Blender actions. The exporter
   still bakes constant tracks for them, which is why the next rule exists.
 - **Never assign `bone.rotation.x` to aim a bone.** The rest quaternions are not

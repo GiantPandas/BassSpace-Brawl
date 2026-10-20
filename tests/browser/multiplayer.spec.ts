@@ -628,7 +628,7 @@ test("a gun shove, then a bounce pad flings you at the perch", async ({
           ];
           const clear = (x: number, z: number) =>
             d.sim.arena.pads.every(
-              (p: any) => (p.y ?? 0) !== 0 || Math.hypot(p.x - x, p.z - z) > 1.4,
+              (p: any) => Math.hypot(p.x - x, p.z - z) > 1.4,
             );
           const pick = cands.find(([x, z]) => clear(x, z)) ?? [s.x, s.z];
           await (window as any).walkTo(pick[0], pick[1]);
@@ -653,7 +653,13 @@ test("a gun shove, then a bounce pad flings you at the perch", async ({
   await expect.poll(async () => (await state(page)).held).toBe(0);
   const launched = await page.evaluate(async () => {
     const d = (window as any).__friendslop;
-    const pad = d.sim.arena.pads.find((p: any) => (p.y ?? 0) === 0);
+    const stage = d.sim.arena.level.find((b: any) => b.kind === "stage");
+    const pad = d.sim.arena.pads.find(
+      (p: any) =>
+        stage &&
+          Math.abs(p.x - stage.p[0]) < stage.s[0] / 2 &&
+          Math.abs(p.z - stage.p[2]) < stage.s[2] / 2,
+    );
     if (pad) await (window as any).walkTo(pad.x, pad.z);
     let maxY = d.state.y;
     const until = performance.now() + 2000;

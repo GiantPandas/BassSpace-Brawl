@@ -22,6 +22,8 @@ type Avatar = {
   color: number;
   /** The hat currently worn, if any. Clones share the proto's geometry. */
   hatGroup?: THREE.Group | null;
+  /** The GLB's hat socket, parented to the head bone so hats ride head tilt. */
+  socket?: THREE.Object3D | null;
   /** The emote being performed, or null. `start` is a performance.now() ms. */
   emote?: { id: string; start: number } | null;
   /** The player this avatar renders (cosmetic lookup key). */
@@ -188,7 +190,7 @@ export class GameScene {
     this.scene.add(sun, sun.target);
     this.renderArena();
     this.loaded = new GLTFLoader()
-      .loadAsync(new URL("models/common-worker.glb", document.baseURI).href)
+      .loadAsync(new URL("models/yellow_visor_mascot.glb", document.baseURI).href)
       .then((asset) => {
         this.asset = asset;
         const cast = [
@@ -1135,15 +1137,6 @@ export class GameScene {
               hsl.l * 0.78,
             );
             copy.roughness = 0.5;
-          } else if (m.name.startsWith("Mouth")) {
-            const hsl = { h: 0, s: 0, l: 0 };
-            baseColor.getHSL(hsl);
-            copy.color.setHSL(
-              (hsl.h + 0.5) % 1.0,
-              1.0,
-              0.48,
-            );
-            copy.roughness = 0.5;
           } else if (m.name.startsWith("Trim")) {
             // Gear trim stays a designed charcoal across every skin: rubbery,
             // never flat black plastic.
@@ -1209,6 +1202,7 @@ export class GameScene {
       current: idle?.[0] ?? "",
       color,
       hatGroup: null,
+      socket: character.getObjectByName("Socket_Hat") ?? null,
       emote: null,
       label,
       nameEl,
@@ -1296,18 +1290,16 @@ export class GameScene {
               hsl.l * 0.78,
             );
           }
-        } else if (n.startsWith("Mouth")) {
-          const hsl = { h: 0, s: 0, l: 0 };
-          base.getHSL(hsl);
-          mat.color.setHSL((hsl.h + 0.5) % 1.0, 1.0, 0.48);
         }
       }
     });
   }
-  /** Swap the hat; every wearer's clone shares the proto's geometry. */
+  /** Swap the hat; every wearer's clone shares the proto's geometry. Hats ride
+   * `Socket_Hat`, so they follow the head bone (head tilt, giant-heads scale) and
+   * never touch the character mesh. */
   private applyHat(a: Avatar, hatId: string | null) {
     if (a.hatGroup) {
-      a.root.remove(a.hatGroup);
+      a.hatGroup.removeFromParent();
       a.hatGroup = null;
     }
     if (!hatId) return;
@@ -1318,10 +1310,12 @@ export class GameScene {
       this.hatProtos.set(hatId, proto);
     }
     const g = proto.clone();
-    a.root.add(g);
+    (a.socket ?? a.root).add(g);
     a.hatGroup = g;
   }
-  /** Procedural hat geometry — no GLB regeneration needed. */
+  /** Procedural hat geometry — no GLB regeneration needed. Positions are
+   * `Socket_Hat`-local: the socket sits on the skull dome at root-space y 1.965,
+   * z 0.02, so a hat authored 0.05-0.10 below the socket overlaps the head. */
   private makeHat(id: string): THREE.Group {
     const g = new THREE.Group();
     const part = (
@@ -1344,18 +1338,18 @@ export class GameScene {
       const dome = part(
         new THREE.SphereGeometry(0.24, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2),
         "#35528c",
-        1.84,
+        -0.125,
       );
       dome.scale.set(1, 0.75, 1);
-      part(new THREE.BoxGeometry(0.36, 0.03, 0.24), "#35528c", 1.85, 0.26);
+      part(new THREE.BoxGeometry(0.36, 0.03, 0.24), "#35528c", -0.115, 0.24);
     } else if (id === "party") {
-      part(new THREE.ConeGeometry(0.2, 0.5, 16), "#ff5da2", 2.03);
-      part(new THREE.SphereGeometry(0.07, 10, 8), "#ffd800", 2.3);
+      part(new THREE.ConeGeometry(0.2, 0.5, 16), "#ff5da2", 0.065);
+      part(new THREE.SphereGeometry(0.07, 10, 8), "#ffd800", 0.335);
     } else if (id === "tophat") {
-      part(new THREE.CylinderGeometry(0.34, 0.34, 0.03, 20), "#1c1c22", 1.9);
-      part(new THREE.CylinderGeometry(0.2, 0.22, 0.4, 20), "#1c1c22", 2.11);
+      part(new THREE.CylinderGeometry(0.34, 0.34, 0.03, 20), "#1c1c22", -0.065);
+      part(new THREE.CylinderGeometry(0.2, 0.22, 0.4, 20), "#1c1c22", 0.145);
     } else if (id === "halo") {
-      const h = part(new THREE.TorusGeometry(0.2, 0.035, 8, 24), "#ffd800", 2.06, 0, {
+      const h = part(new THREE.TorusGeometry(0.2, 0.035, 8, 24), "#ffd800", 0.095, 0, {
         emissive: "#b8860b",
         emissiveIntensity: 0.7,
       });
