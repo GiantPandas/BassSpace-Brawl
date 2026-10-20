@@ -54,7 +54,8 @@ views=[('01-front',(0,-6,1.04),T,2.3),('02-back',(0,6,1.04),T,2.3),
 ('05-three-quarter',(-4.3,-4.3,2.3),(0,0,1.05),2.3),('06-head-top',(0,0,6),(0,-.02,1.97),.9),
 ('07-face-closeup',(0,-3,1.58),(0,-.20,1.55),.68),('08-hood-closeup',(1.9,1.9,1.55),(0,.14,1.36),1.0),
 ('09-strap-pouch',(-1.6,-2.6,1.00),(.08,0,.95),.8),('10-boots',(-1.3,-2.2,.28),(0,0,.14),.65),
-('11-wireframe',(-4.3,-4.3,2.3),(0,0,1.05),2.3)]
+('11-wireframe',(-4.3,-4.3,2.3),(0,0,1.05),2.3),
+('12-boots-side',(4.5,0,.22),(0,0,.20),.7)]
 wire=os.environ.get('WIRE')=='1'
 cam=bpy.data.cameras.new('Cam');cam.type='ORTHO'
 ce=bpy.data.objects.new('Cam',cam);bpy.context.collection.objects.link(ce)
@@ -96,7 +97,7 @@ if wire:
   print('OUTFILES',[p.name for p in OUT.iterdir()])
   if src.exists():os.replace(src,OUT/'11-wireframe.png')
 else:
-  scene.frame_start=1;scene.frame_end=10
+  scene.frame_start=1;scene.frame_end=n
   bpy.ops.render.render(animation=True)
 names=[v[0] for v in views if (wire)==v[0].startswith('11')]
 if not wire:

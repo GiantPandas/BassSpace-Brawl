@@ -22,7 +22,7 @@ body=material('BodyColor / tintable',(.85,.55,.10));cloth=material('Jacket / tin
 nose=material('Nose / tintable',(.72,.52,.34))
 eye_white=material('EyeWhite',(.96,.95,.90),.25);eye_pupil=material('EyePupil',(.04,.04,.05),.15)
 trim=material('Trim',(.05,.06,.08),.45);shiny=material('Buckle / metal',(.42,.34,.18),.3,.8)
-pants=material('Trousers',(.09,.10,.12));boots=material('Boots / ochre',(.66,.45,.18))
+pants=material('Trousers',(.09,.10,.12))
 # The model ships bare-headed; hats are runtime cosmetics hung on Socket_Hat by
 # scene.ts, never GLB geometry.
 # The head is close to a perfect sphere (the reference head ball measures ~0.66 in all
@@ -95,6 +95,31 @@ def sphere_cut(name,p,size,mat,bone,co,no,keep,segments=16,rings=9):
   for f in bmesh.ops.holes_fill(bm,edges=rim,sides=0)['faces']:f.smooth=False
   bm.to_mesh(o.data);bm.free();o.data.update()
   return finish(o,name,None,mat,bone)
+def boot(name,x,prof,mat,bone):
+  """A boot lofted along its measured side silhouette. Stacked boxes read as a
+  staircase of shelves where the reference slopes from toe to ankle, so the profile is
+  walked in (y,z,rx) and a prism is lofted along X that IS the shoe's outline: the side
+  view is the shape by construction. Sole slab buries the bottom edge, toe cap and heel
+  extend the silhouette forward and back. The profile is walked clockwise in the YZ
+  plane, and faces wind (L_i,R_i,R_{i+1},L_{i+1}) so their normals face outward — the
+  reversed order shades as the inside of the boot, which is what a side view shows."""
+  verts=[]
+  for y,z,rx in prof:verts+=[(x-rx,y,z),(x+rx,y,z)]
+  n=len(prof)
+  faces=[(2*i,2*i+1,2*((i+1)%n)+1,2*((i+1)%n)) for i in range(n)]
+  # The profile extrudes along X, so every wall face has a normal in YZ: from the side
+  # the boot is an open tube you look straight down the barrel of. Both ends are capped
+  # with the profile polygon itself, wound to face out (the profile walks clockwise in
+  # the YZ plane, so the far side is the reversed order).
+  faces.append(tuple(2*i for i in range(n)))
+  faces.append(tuple(2*i+1 for i in reversed(range(n))))
+  mesh=bpy.data.meshes.new(name);mesh.from_pydata(verts,[],faces);mesh.update()
+  o=bpy.data.objects.new(name,mesh);bpy.context.collection.objects.link(o)
+  o.name=name;o.data.materials.append(mat)
+  for f in o.data.polygons:f.use_smooth=True
+  group=o.vertex_groups.new(name=bone);group.add(list(range(len(o.data.vertices))),1,'REPLACE')
+  mod=o.modifiers.new('Rig','ARMATURE');mod.object=rig;o.parent=rig
+  return o
 def head_half(name,upper,bone):
   """One half of the skull, capped with a flat disc at the cut (body-colored,
   the jaw seam ring hides the seam line itself). Broad forehead, tapered lower
@@ -184,11 +209,10 @@ for sign,label in [(1,'L'),(-1,'R')]:
   ring('Cuff.'+label,(sign*.26,0,.785),(.150,.150,.045),trim,'forearm'+label,maj=10,minor=3)
   plate('Palm.'+label,(sign*.26,-.015,.665),(.105,.115,.110),body,'forearm'+label,bevel=.035)
   capsule('Thumb.'+label,(sign*.205,-.055,.625),(.050,.058,.095),body,'forearm'+label,round_ends=.5,rot=(0,sign*-.35,0))
-  # Fingers hang below the palm, spread across its own width so the hand reads as a
-  # rounded glove at the game camera: the earlier set ran past the palm's outer edge
-  # and read as a blocky comb sticking out sideways.
-  for fx,fy,fz in [(.235,-.035,.555),(.260,-.039,.549),(.285,-.035,.553)]:
-    capsule('Finger.'+label,(sign*fx,fy,fz),(.046,.052,.120),body,'forearm'+label,round_ends=.45)
+  # One rounded knuckle mass under the palm front: three finger capsules read as a comb
+  # of lumps from the game camera, so the glove is a single rounded blob plus the thumb,
+  # which is how the reference hands read at a distance.
+  ball('Knuckles.'+label,(sign*.26,-.045,.600),(.100,.095,.080),body,'forearm'+label,segments=10,rings=6)
 # --- Crossbody strap: a ribbon hugging the jacket from right shoulder to left hip.
 def strap(name):
   p1=(-.185,1.295);p2=(.215,.835);NS=10;verts=[]
@@ -215,7 +239,7 @@ plate('Strap slide',(0,front(1.10)+.004,1.065),(.040,.014,.030),shiny,'spine',be
 plate('Pouch',(.150,front(.90,.15)-.012,.905),(.155,.070,.195),trim,'spine',bevel=.018,seg=2)
 plate('Pouch flap',(.150,front(.90,.15)-.018,.955),(.145,.050,.090),trim,'spine',bevel=.010)
 plate('Pouch clasp',(.150,front(.90,.15)-.046,.905),(.040,.020,.050),shiny,'spine',bevel=0)
-plate('Pouch badge',(.104,front(.90,.15)-.042,.932),(.030,.012,.030),boots,'spine',bevel=0)
+plate('Pouch badge',(.104,front(.90,.15)-.042,.932),(.030,.012,.030),body,'spine',bevel=0)
 # Belt and buckle: the band wraps the waist contour, buckle proud of the front.
 ring('Belt',(0,.006,.840),(.450,.340,.075),trim,'hips',maj=14,minor=3)
 plate('Buckle',(0,front(.840)+.010,.840),(.075,.030,.090),shiny,'hips',bevel=.010)
@@ -227,19 +251,33 @@ for sign,label in [(1,'L'),(-1,'R')]:
   column('Thigh.'+label,(sign*.14,0,.590),(.145,.150,.340),pants,'leg'+label,taper=.88,verts=6)
   ball('Knee.'+label,(sign*.14,0,.420),(.155,.160,.155),pants,'shin'+label,segments=8,rings=5)
   column('Shin.'+label,(sign*.14,0,.260),(.135,.140,.300),pants,'shin'+label,taper=.88,verts=6)
-# Boots: measured from the reference side view, each boot is ~0.21 of the figure's
-# height in length and ~0.16 in height — much chunkier than the first pass. Thick dark
-# sole, tall ochre upper, rubber toe cap wrapping the front, a dark strap band buckled
-# over the instep, and an ankle collar sized to the upper's own width (not the shin's)
-# so it reads as a band on the boot, not a ring floating around the leg.
+# Boots, measured from the isolated reference shoe (reference/shoe.png, front on the
+# left): 0.575 m long, 0.41 m high — a tall boot, not the low one the first pass
+# produced. Ankle centre sits 0.40 m forward of the toe tip, heel 0.17 m behind. The
+# bright panels ride BodyColor / tintable, so the boot takes the player's colour like
+# the head and jacket; sole, toe cap, band and buckle keep their own materials.
+# BOOT is the side silhouette measured off the shoe as (y,z,rx): the loft below IS that
+# outline, so the side view reads as the reference — toe tip -0.425, heel back 0.19,
+# ankle centre at y 0, widest at the foot, waist at the instep, shaft ending flat at
+# z 0.415 (a tent apex pokes above the cuff like a cone tip, so the top edge is level).
+BOOT=[(-.30,.105,.115),(-.35,.160,.112),(-.26,.235,.108),(-.16,.30,.100),
+      (-.10,.37,.120),(-.05,.415,.120),(.07,.415,.120),(.12,.37,.116),
+      (.13,.26,.104),(.16,.15,.114),(.16,.105,.115)]
 for sign,label in [(1,'L'),(-1,'R')]:
-  plate('Sole.'+label,(sign*.13,-.060,.030),(.245,.430,.060),trim,'foot'+label,bevel=.022,seg=2)
-  plate('Upper.'+label,(sign*.13,-.055,.175),(.230,.350,.230),boots,'foot'+label,bevel=.060,seg=2)
-  ball('Toe cap.'+label,(sign*.13,-.225,.090),(.215,.150,.140),trim,'foot'+label,segments=8,rings=5)
-  plate('Strap.'+label,(sign*.13,-.055,.205),(.252,.372,.048),trim,'foot'+label,bevel=.012,seg=2)
-  plate('Buckle.'+label,(sign*.13,-.185,.205),(.042,.048,.072),shiny,'foot'+label,bevel=.008)
-  ring('Boot collar.'+label,(sign*.13,-.030,.290),(.215,.335,.050),trim,'foot'+label,maj=10,minor=3)
-  plate('Heel.'+label,(sign*.13,.125,.075),(.205,.100,.070),trim,'foot'+label,bevel=.012,seg=2)
+  plate('Sole.'+label,(sign*.13,-.1125,.055),(.245,.575,.110),trim,'foot'+label,bevel=.025,seg=2)
+  ball('Toe cap.'+label,(sign*.13,-.315,.120),(.225,.170,.140),trim,'foot'+label,segments=8,rings=5)
+  plate('Heel.'+label,(sign*.13,.120,.090),(.205,.100,.110),trim,'foot'+label,bevel=.012,seg=2)
+  boot('Boot.'+label,sign*.13,BOOT,body,'foot'+label)
+  # Dark band + brass buckle across the instep only: a short strap, not a stripe across
+  # the whole boot. The band front sits 0.01 proud of the loft's front at z 0.26 (the
+  # loft front there is y -0.222), the buckle proud of the band, so it reads as a strap
+  # fastened on the boot.
+  plate('Band.'+label,(sign*.13,-.162,.265),(.240,.140,.050),trim,'foot'+label,bevel=.012,seg=2)
+  plate('Buckle.'+label,(sign*.13,-.245,.265),(.075,.026,.075),shiny,'foot'+label,bevel=.008)
+  # The cuff is dark in the reference, not the boot's own colour: the band sits at the
+  # shaft's top edge (profile top runs y -0.05..0.07 at z 0.415), so its opening matches
+  # that edge — front arc at the instep top, back arc at the shaft rear.
+  ring('Boot cuff.'+label,(sign*.13,.01,.41),(.240,.120,.080),trim,'foot'+label,maj=12,minor=4)
 # Neck, mostly hidden inside the collar: head reads as connected, not floating.
 column('Neck',(0,-.01,1.360),(.140,.140,.200),body,'head',taper=.92,verts=6,round_ends=.25)
 # Hat socket: an empty on the crown, parented to the head bone so any future
