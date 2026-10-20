@@ -465,15 +465,22 @@ test("original jump and footstep audio works without enabling the microphone", a
     .poll(() => page.evaluate(() => (window as any).__sounds.includes("step")))
     .toBe(true);
   await page.keyboard.up("w");
-  await page.keyboard.press("Space", { delay: 100 });
+  // A generated arena can launch the walker on a bounce pad: a jump pressed
+  // mid-air is rejected by the motor, so the sound never fires, and the pad
+  // launch itself plays a jump. Land, then count jumps made after the press.
   await expect
     .poll(() =>
-      page.evaluate(
-        () =>
-          (window as any).__sounds.filter((s: string) => s === "jump").length,
-      ),
+      page.evaluate(() => (window as any).__friendslop.state.flags & 1),
     )
     .toBe(1);
+  const jumps = () =>
+    page.evaluate(
+      () =>
+        (window as any).__sounds.filter((s: string) => s === "jump").length,
+    );
+  const before = await jumps();
+  await page.keyboard.press("Space", { delay: 100 });
+  await expect.poll(() => jumps()).toBeGreaterThan(before);
   await expect
     .poll(() => page.evaluate(() => (window as any).__audioPeak))
     .toBeGreaterThan(0.005);
