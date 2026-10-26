@@ -1,5 +1,6 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
+  AIR,
   AUTO_RANGE,
   DOOR_SLAM,
   DOOR_TRAVEL,
@@ -14,6 +15,7 @@ import {
   gunReloadTicks,
   isGun,
   magazineOf,
+  reserveOf,
   type Door,
   type GunKind,
   type GunSpec,
@@ -84,6 +86,9 @@ export type Shot = {
 };
 /** Pellet ids start here so they never collide with the fixed prop set. */
 export const PELLET_ID_BASE = 1000;
+/** Guns dropped from the sky ride the same prop channel: their ids sit above
+ *  the fixed prop set and below the pellets, so nothing collides. */
+export const DROP_ID_BASE = 500;
 /** One live pellet body and how long it gets to fly. */
 export type Pellet = {
   body: RAPIER.RigidBody;
@@ -190,6 +195,10 @@ export class Simulation {
   /** Breakable panes keyed by window id, plus ids shattered since the drain. */
   windows = new Map<number, WindowRuntime>();
   windowEvents: number[] = [];
+  /** Dropped guns that fell out of the world since the last drain (authority
+   * only): there is no spawn point to put them back at, so the host retires
+   * them and every client stops drawing them. */
+  dropEvents: number[] = [];
   /** Chaos explosions since the last drain (authority only). */
   explosionEvents: { x: number; y: number; z: number }[] = [];
   /** Impacts worth hearing since the last drain (authority only, design doc §17). */
@@ -206,6 +215,8 @@ export class Simulation {
       build: number;
       angry?: boolean;
       magnet?: boolean;
+      /** Thrown as a completely empty gun: it hits like a club (AIR.club). */
+      empty?: boolean;
       born: number;
     }
   >();
@@ -220,6 +231,15 @@ export class Simulation {
   /** Live pellets; their ids start at PELLET_ID_BASE and ride the prop channel. */
   pellets = new Map<number, Pellet>();
   private nextPelletId = PELLET_ID_BASE;
+  /** Guns that fell out of the sky: id → kind, so `kind()` knows them too. */
+  drops = new Map<number, GunKind>();
+  /**
+   * What is left inside a gun nobody is holding, keyed by prop id. The supply
+   * belongs to the gun, not to the player: a half-used gun on the floor hands
+   * the next hands what is left of it. Guns nobody has fired are absent.
+   */
+  private supplies = new Map<number, { mag: number; reserve: number }>();
+  private nextDropId = DROP_ID_BASE;
   private reloadAt = new Map<number, number>();
   /** Collider handle → who it is, so contact events know what just touched. */
   private entities = new Map<
@@ -309,9 +329,10 @@ export class Simulation {
     }
     this.world.step();
   }
-  /** Prop kind by id; ids are positions in the layout's prop list. */
+  /** Prop kind by id: arena ids are positions in the layout's prop list, and
+   *  guns that fell out of the sky are remembered in `drops`. */
   kind(objectId: number): PropKind | undefined {
-    return this.arena.props[objectId - 1]?.kind;
+    return this.drops.get(objectId) ?? this.arena.props[objectId - 1]?.kind;
   }
   addPlayer(id: number) {
     const spawn = this.arena.spawns[(id - 1) % this.arena.spawns.length];
@@ -350,6 +371,7 @@ export class Simulation {
       hp: COMBAT.hpMax,
       out: 0,
       ammo: WEAPON.ammo,
+      reserve: reserveOf("gun"),
       build: 0,
       ack: 0,
       pool: 0,
@@ -754,13 +776,16 @@ export class Simulation {
       st = buildStats(s.build),
       reload = this.reloadTicks(g, st);
     if (s.ammo <= 0) {
-      // Dry trigger: start the reload and let the client watch it finish.
-      this.reloadAt.set(playerId, this.frame + reload);
+      // Dry trigger: with spare rounds the gun starts a reload and the client
+      // watches it finish. With none left the gun is spent — there is nothing
+      // to take, so it fires nothing and the client hears the click.
+      if (s.reserve > 0) this.reloadAt.set(playerId, this.frame + reload);
       return null;
     }
     this.cooldowns.set(playerId, this.frame + g.cooldown);
     s.ammo--;
-    if (s.ammo === 0) this.reloadAt.set(playerId, this.frame + reload);
+    if (s.ammo === 0 && s.reserve > 0)
+      this.reloadAt.set(playerId, this.frame + reload);
     const speed =
       g.pelletSpeed *
       st.pelletSpeedMult *
@@ -864,7 +889,9 @@ export class Simulation {
     const kind = this.kind(c.state.held);
     if (!isGun(kind)) return false;
     if ((this.reloadAt.get(playerId) ?? -1) > this.frame) return false;
-    if (c.state.ammo >= GUNS[kind].ammo) return false;
+    // Nothing to take when the magazine is already full, and nothing at all
+    // once the gun's spare rounds are gone: that gun is spent.
+    if (c.state.ammo >= GUNS[kind].ammo || c.state.reserve <= 0) return false;
     this.reloadAt.set(
       playerId,
       this.frame + this.reloadTicks(GUNS[kind], buildStats(c.state.build)),
@@ -947,10 +974,13 @@ export class Simulation {
           : RAPIER.CoefficientCombineRule.Min,
       );
     }
-    // Every gun hands you its own magazine, and a reload already running is
-    // about a gun you no longer have.
+    // Every gun hands you its own magazine plus whatever spare rounds are
+    // still inside it, and a reload already running is about a gun you no
+    // longer have.
     if (isGun(kind)) {
-      c.state.ammo = magazineOf(kind);
+      const sup = this.supply(objectId)!;
+      c.state.ammo = sup.mag;
+      c.state.reserve = sup.reserve;
       this.reloadAt.delete(playerId);
     }
     return true;
@@ -980,12 +1010,22 @@ export class Simulation {
     );
     body.setAngvel({ x: throwing ? 2 : 0, y: throwing ? 1 : 0, z: 0 }, true);
     // Junk cards (design doc §8): the thrower's build rides with the prop.
-    const st = buildStats(c.state.build);
+    const st = buildStats(c.state.build),
+      kind = this.kind(id),
+      // Whatever is left in the gun stays in it — the next player gets the
+      // dregs, and a gun with nothing left is thrown as a club.
+      spent = isGun(kind) && c.state.ammo + c.state.reserve <= 0;
+    if (isGun(kind))
+      this.supplies.set(id, {
+        mag: c.state.ammo,
+        reserve: c.state.reserve,
+      });
     this.propMeta.set(id, {
       thrower: playerId,
       build: c.state.build,
-      angry: st.angryBall && this.kind(id) === "ball",
+      angry: st.angryBall && kind === "ball",
       magnet: st.magnetGlove && !throwing,
+      empty: throwing && spent,
       born: this.frame,
     });
     if (st.bounceJunk) {
@@ -996,6 +1036,70 @@ export class Simulation {
       }
     }
     return true;
+  }
+  /** Rounds left inside a gun nobody holds. A gun nobody has fired is full,
+   *  so it is simply absent from the supply map. */
+  supply(objectId: number): { mag: number; reserve: number } | null {
+    const kind = this.kind(objectId);
+    if (!isGun(kind)) return null;
+    return (
+      this.supplies.get(objectId) ?? {
+        mag: GUNS[kind].ammo,
+        reserve: reserveOf(kind),
+      }
+    );
+  }
+  /**
+   * Set a gun down that fell out of the sky. The authority calls this on the
+   * round's timer and broadcasts the id, kind and position; a prediction world
+   * calls it with the authoritative id so its kinematic proxy can follow the
+   * snapshots, exactly like every other prop.
+   */
+  spawnDrop(kind: GunKind, at: { x: number; y: number; z: number }, id = 0) {
+    const objectId = id || this.freeDropId(),
+      body = this.world.createRigidBody(
+        (this.prediction
+          ? RAPIER.RigidBodyDesc.kinematicPositionBased()
+          : RAPIER.RigidBodyDesc.dynamic()
+        )
+          .setTranslation(at.x, at.y, at.z)
+          .setLinearDamping(0.6)
+          .setAngularDamping(0.8)
+          .setCcdEnabled(true),
+      ),
+      collider = this.world.createCollider(shape(kind), body);
+    collider.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+    this.propColliders.set(objectId, collider);
+    this.props.set(objectId, body);
+    this.owners.set(objectId, 0);
+    this.drops.set(objectId, kind);
+    this.entities.set(collider.handle, { kind: "prop", id: objectId, body });
+    return objectId;
+  }
+  /** Retire a sky-dropped gun. One in someone's hands is left alone. */
+  removeDrop(objectId: number) {
+    if (this.owners.get(objectId)) return false;
+    const body = this.props.get(objectId);
+    if (!body) return false;
+    this.entities.delete(body.collider(0).handle);
+    this.world.removeRigidBody(body);
+    this.props.delete(objectId);
+    this.owners.delete(objectId);
+    this.propColliders.delete(objectId);
+    this.propMeta.delete(objectId);
+    this.supplies.delete(objectId);
+    this.drops.delete(objectId);
+    return true;
+  }
+  /** The next free id in the drop band (500..999, under the pellets). */
+  private freeDropId() {
+    for (let i = 0; i < PELLET_ID_BASE - DROP_ID_BASE; i++) {
+      const id = this.nextDropId;
+      this.nextDropId =
+        this.nextDropId + 1 >= PELLET_ID_BASE ? DROP_ID_BASE : this.nextDropId + 1;
+      if (!this.props.has(id)) return id;
+    }
+    return PELLET_ID_BASE;
   }
   /** Slide every leaf toward its target; automatic ones watch for company. */
   private moveDoors() {
@@ -1043,10 +1147,19 @@ export class Simulation {
     this.frame++;
     for (const [id, until] of this.reloadAt)
       if (this.frame >= until) {
-        const c = this.players.get(id);
-        // Refill whatever is actually in hand — a gun picked up mid-reload
-        // would otherwise come back with the pistol's six rounds.
-        if (c) c.state.ammo = magazineOf(this.kind(c.state.held));
+        const c = this.players.get(id),
+          kind = this.kind(c ? c.state.held : 0);
+        // Refill whatever is actually in hand, out of that gun's own spare
+        // rounds: a gun picked up mid-reload would otherwise come back with
+        // the pistol's six, and a spent gun comes back with nothing.
+        if (c && isGun(kind)) {
+          const take = Math.min(
+            GUNS[kind].ammo - c.state.ammo,
+            c.state.reserve,
+          );
+          c.state.ammo += take;
+          c.state.reserve -= take;
+        }
         this.reloadAt.delete(id);
       }
     this.moveDoors();
@@ -1165,6 +1278,12 @@ export class Simulation {
       for (const [id, body] of this.props) {
         if (id >= PELLET_ID_BASE) continue;
         if (body.translation().y < -8) {
+          if (id >= DROP_ID_BASE) {
+            // A gun that missed every platform has nowhere to come back from:
+            // retire it. One still in someone's hands is theirs to lose.
+            if (this.removeDrop(id)) this.dropEvents.push(id);
+            continue;
+          }
           const p = this.arena.props[id - 1].p;
           body.setTranslation({ x: p[0], y: p[1] + 1.5, z: p[2] }, true);
           body.setLinvel({ x: 0, y: 0, z: 0 }, true);
@@ -1596,7 +1715,13 @@ export class Simulation {
             );
           }
         } else {
-          this.hurt(victim, tstats?.heavyJunk ? rel * 1.8 : rel);
+          // A thrown gun with nothing left in it is dead weight, and dead
+          // weight lands like a club: the same impact, more of it.
+          this.hurt(
+            victim,
+            tstats?.heavyJunk ? rel * 1.8 : rel,
+            meta?.empty ? AIR.club : 1,
+          );
           if (tstats?.dangerousJunk && rel > COMBAT.threshold) {
             const p = this.entityPosition(propE);
             if (p) this.boomAt(p, 2.5, 4, 2, 6);
@@ -1648,6 +1773,7 @@ export class Simulation {
     s.hp = COMBAT.hpMax;
     s.out = 0;
     s.ammo = WEAPON.ammo;
+    s.reserve = reserveOf("gun");
     this.reloadAt.delete(s.id);
     this.cooldowns.delete(s.id);
     this.meleeCooldowns.delete(s.id);
@@ -1662,6 +1788,13 @@ export class Simulation {
     if (!c || !c.state.held) return;
     const id = c.state.held,
       body = this.props.get(id)!;
+    // A gun left on the ground keeps whatever is left inside it, exactly like
+    // a thrown one: the next player picks up the dregs, not a fresh magazine.
+    if (isGun(this.kind(id)))
+      this.supplies.set(id, {
+        mag: c.state.ammo,
+        reserve: c.state.reserve,
+      });
     c.state.held = 0;
     this.owners.set(id, 0);
     body.setBodyType(

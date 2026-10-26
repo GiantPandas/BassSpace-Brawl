@@ -10,8 +10,25 @@ import {
   BUTTON,
   changedProp,
 } from "../src/shared/protocol.js";
-import { PELLET_ID_BASE, initPhysics, Simulation } from "../src/shared/simulation.js";
-import { HORN, MELEE, PADS, PROPS, STEP, WEAPON, GUNS, type GunKind } from "../src/shared/level.js";
+import {
+  DROP_ID_BASE,
+  PELLET_ID_BASE,
+  initPhysics,
+  Simulation,
+} from "../src/shared/simulation.js";
+import {
+  AIR,
+  HORN,
+  MELEE,
+  PADS,
+  PROPS,
+  STEP,
+  WEAPON,
+  GUNS,
+  reserveOf,
+  type GunKind,
+} from "../src/shared/level.js";
+import { buildArena, groundAt } from "../src/shared/arena.js";
 import { cardBit } from "../src/shared/upgrades.js";
 import {
   DEFAULT_COSMETICS,
@@ -808,17 +825,172 @@ test("the seeker's own rounds curve onto an off-axis player", () => {
   assert.ok(victim.state.hp < COMBAT.hpMax, "and the fan stung them");
   sim.dispose();
 });
-test("picking up a gun loads its own magazine", () => {
+test("picking up a gun loads its own magazine and its spare rounds", () => {
   const sim = new Simulation(),
     shooter = sim.addPlayer(1);
   sim.restore(shooter, { ...shooter.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
   assert.equal(shooter.state.ammo, WEAPON.ammo, "you start with the pistol's six");
+  assert.equal(shooter.state.reserve, reserveOf("gun"), "plus two reloads behind them");
   hold(sim, 1, "smg");
   assert.equal(shooter.state.ammo, GUNS.smg.ammo, "the buzz gun comes loaded");
+  assert.equal(shooter.state.reserve, reserveOf("smg"), "twenty-six rounds behind that");
   assert.equal(sim.release(1), true, "hands it back");
   hold(sim, 1, "launcher");
   assert.equal(shooter.state.ammo, GUNS.launcher.ammo, "the boom tube carries two");
+  assert.equal(shooter.state.reserve, GUNS.launcher.ammo * GUNS.launcher.reloads, "and no more");
   sim.dispose();
+});
+test("a gun runs dry: its spare rounds refuel the magazine, then it is spent", () => {
+  const sim = new Simulation(),
+    shooter = sim.addPlayer(1);
+  sim.restore(shooter, { ...shooter.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
+  hold(sim, 1, "gun");
+  shooter.state.ammo = 1;
+  shooter.state.reserve = 2;
+  assert.ok(sim.shoot(1), "the last round in the magazine goes");
+  assert.equal(shooter.state.ammo, 0, "the magazine is empty");
+  assert.equal(sim.shoot(1), null, "the empty trigger fires nothing");
+  assert.equal(sim.reload(1), false, "the empty trigger started the reload itself");
+  for (let i = 0; i < WEAPON.reload + 2; i++) sim.step();
+  assert.equal(shooter.state.ammo, 2, "the last reload hands over only what was left");
+  assert.equal(shooter.state.reserve, 0, "and nothing after that");
+  assert.ok(sim.shoot(1), "the rounds it did take still fire");
+  for (let i = 0; i < GUNS.gun.cooldown; i++) sim.step();
+  assert.ok(sim.shoot(1), "and so does the last of them");
+  assert.equal(shooter.state.ammo, 0, "the magazine is empty again");
+  assert.equal(sim.shoot(1), null, "with nothing behind it the trigger is dead");
+  assert.equal(sim.reload(1), false, "and there is nothing left to reload");
+  sim.dispose();
+});
+test("a thrown gun with nothing left in it hits like a club", () => {
+  const toss = (empty: boolean) => {
+    const sim = new Simulation(),
+      thrower = sim.addPlayer(1),
+      victim = sim.addPlayer(2);
+    sim.restore(thrower, {
+      ...thrower.state,
+      x: 0,
+      y: 0.87,
+      z: 2,
+      yaw: 0,
+      pitch: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+    });
+    hold(sim, 1, "smg");
+    if (empty) {
+      thrower.state.ammo = 0;
+      thrower.state.reserve = 0;
+    }
+    sim.restore(victim, {
+      ...victim.state,
+      x: 0,
+      y: 0.87,
+      z: 3,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      stagger: 0,
+      out: 0,
+    });
+    sim.restore(thrower, {
+      ...thrower.state,
+      x: 0,
+      y: 0.87,
+      z: 6,
+      yaw: Math.PI,
+      pitch: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+    });
+    assert.equal(sim.release(1, true), true, "it is thrown");
+    for (let i = 0; i < 60 && victim.state.stagger === 0; i++) sim.step();
+    const lost = COMBAT.hpMax - victim.state.hp;
+    sim.dispose();
+    return lost;
+  };
+  const loaded = toss(false),
+    spent = toss(true);
+  assert.ok(spent > 0, "an empty gun still hurts");
+  assert.ok(spent > loaded, `dead weight is heavier than a loaded gun: ${spent} vs ${loaded}`);
+});
+test("a gun handed over on the floor keeps what was left inside it", () => {
+  const sim = new Simulation(),
+    first = sim.addPlayer(1),
+    second = sim.addPlayer(2);
+  sim.restore(first, { ...first.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
+  const id = hold(sim, 1, "smg");
+  first.state.ammo = 4;
+  first.state.reserve = 9;
+  assert.equal(sim.release(1), true, "set down mid-fight");
+  const body = sim.props.get(id)!;
+  body.setTranslation({ x: 0, y: 1.52, z: 0.5 }, true);
+  body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+  body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  sim.step();
+  sim.restore(second, { ...second.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
+  assert.equal(sim.pickup(2, id), true, "the next player finds it");
+  assert.equal(second.state.ammo, 4, "it hands over the rounds in the magazine");
+  assert.equal(second.state.reserve, 9, "and the rounds behind it");
+  sim.dispose();
+});
+test("a gun from the sky is a prop like any other", () => {
+  const sim = new Simulation(),
+    c = sim.addPlayer(1);
+  sim.restore(c, { ...c.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
+  const id = sim.spawnDrop("rifle", { x: 0, y: 1.52, z: 0.5 });
+  assert.ok(id >= DROP_ID_BASE && id < PELLET_ID_BASE, "its id rides the prop channel");
+  assert.equal(sim.kind(id), "rifle", "the simulation knows what it is");
+  sim.props.get(id)!.setLinvel({ x: 0, y: 0, z: 0 }, true);
+  sim.step();
+  assert.equal(sim.pickup(1, id), true, "the eye ray finds it");
+  assert.equal(c.state.held, id, "it is held");
+  assert.equal(c.state.ammo, GUNS.rifle.ammo, "with its own magazine");
+  assert.equal(c.state.reserve, reserveOf("rifle"), "and its spare rounds");
+  assert.equal(sim.removeDrop(id), false, "one in hand is not taken back");
+  const falling = sim.spawnDrop("gun", { x: 4, y: 6, z: 4 });
+  assert.ok(AIR.kinds.every((k) => k in GUNS), "the sky only ever drops real guns");
+  for (let i = 0; i < 150; i++) sim.step();
+  assert.ok(sim.props.get(falling)!.translation().y < 1.2, "a dropped gun lands on a floor");
+  assert.equal(sim.removeDrop(falling), true, "an untouched one can go");
+  assert.equal(sim.props.has(falling), false, "body, collider and record are gone");
+  sim.dispose();
+});
+test("a gun that falls out of the world retires instead of crashing the tick", () => {
+  // A drop id has no entry in `arena.props`, so the arena's respawn-on-empty
+  // floor path must not run for it: that used to throw and take the tick down.
+  const sim = new Simulation();
+  const id = sim.spawnDrop("smg", { x: 0, y: -10, z: 0 });
+  sim.step();
+  assert.equal(sim.props.has(id), false, "nothing keeps falling through the world");
+  assert.deepEqual(sim.dropEvents, [id], "the host is told once, to retire the mesh");
+  sim.step();
+  assert.equal(
+    sim.dropEvents.filter((d) => d === id).length,
+    1,
+    "it is reported once, and stays that way until the host drains the list",
+  );
+  sim.dispose();
+});
+test("every spawn stands on a floor, so a supply drop never lands in the void", () => {
+  for (const code of ["AAAAAA", "7QK4MB", "HTRC2V", "ZZ2W6X"]) {
+    const arena = buildArena(code);
+    for (const s of arena.spawns) {
+      const floor = groundAt(arena, s[0], s[2], s[1] + 1);
+      assert.ok(floor !== null, `${code}: spawn ${s.join(",")} stands on something`);
+      assert.ok(
+        s[1] - floor > 0.2 && s[1] - floor < 2,
+        `${code}: the floor under ${s.join(",")} is at ${floor}`,
+      );
+    }
+    assert.equal(
+      groundAt(arena, arena.bounds.minX - 10, arena.bounds.minZ - 10),
+      null,
+      "outside the arena there is nothing to land on",
+    );
+  }
 });
 test("a bounce pad launches you toward its perch", () => {
   const sim = new Simulation(),

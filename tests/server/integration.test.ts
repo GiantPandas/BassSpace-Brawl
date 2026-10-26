@@ -10,6 +10,7 @@ import {
   type Input,
 } from "../../src/shared/protocol.js";
 import { buildArena } from "../../src/shared/arena.js";
+import { AIR, GUNS, type GunKind } from "../../src/shared/level.js";
 let server: http.Server,
   app: Awaited<ReturnType<typeof attachApplication>>,
   url: string;
@@ -326,6 +327,38 @@ test("a fall through the stage while the lobby waits is not an elimination", asy
   assert.ok(Math.abs(player.state.y - spawn[1]) < 0.5, "back on top of the slab");
   assert.equal(player.state.z, spawn[2]);
   assert.equal(player.state.out, 0, "still in, waiting for the ready gate");
+});
+test("guns fall out of the sky through a live round", async () => {
+  const a = await member(),
+    code = a.welcome.code,
+    b = await member(code);
+  const drops: any[] = [];
+  a.ws.on("message", (raw: any, binary: boolean) => {
+    if (binary) return;
+    const m = JSON.parse(raw.toString());
+    if (m.type === "airdrop") drops.push(m);
+  });
+  await startMatch(a, b);
+  const room = app.rooms.get(code)!;
+  // A countdown runs three seconds, then the round; the first drop lands one
+  // AIR.period into it. Poll rather than sleep blind so the test is quick on a
+  // loaded machine and honest about the timer on a slow one.
+  const deadline = Date.now() + 16000;
+  while (Date.now() < deadline && drops.length === 0)
+    await new Promise((r) => setTimeout(r, 100));
+  assert.ok(drops.length >= 1, "at least one gun fell in during the round");
+  const first = drops[0];
+  assert.ok(GUNS[first.kind as GunKind], "the sky only ever drops real guns");
+  assert.ok(first.id >= 500 && first.id < 1000, "its id rides the prop channel");
+  assert.ok(room.sim.props.has(first.id), "the authority has a body for it");
+  assert.equal(room.sim.kind(first.id), first.kind, "and knows what it is");
+  const spawn = buildArena(code).spawns;
+  assert.ok(
+    spawn.some(
+      (s) => Math.hypot(first.x - s[0], first.z - s[2]) <= AIR.scatter * 2 + 0.01,
+    ),
+    "it comes in over a spawn, not into the void",
+  );
 });
 /**
  * Ready both members and get to the countdown. A match now opens on a card

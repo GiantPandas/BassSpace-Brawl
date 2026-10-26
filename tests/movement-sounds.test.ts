@@ -22,6 +22,7 @@ test("steps follow grounded travel; jumping sounds once, never from falling or t
     hp: 100,
     out: 0,
     ammo: 6,
+    reserve: 0,
     build: 0,
     ack: 0,
     pool: 0,

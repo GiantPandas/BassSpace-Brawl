@@ -42,7 +42,8 @@ src/
                               WINDOWS (breakable panes) + WINDOW break speed,
                               SPAWNS, PROPS (six guns/bat/horn/ball/crate/chair/
                               table/trashcan/bottle/bucket) + propKind + GUNS
-                              (per-gun tuning), PALETTE,
+                              (per-gun tuning incl. `reloads`) + AIR (sky drops),
+                              PALETTE,
                               STEP = 1/60, MAX_PLAYERS = 8, WEAPON tuning,
                               DOOR_TRAVEL/AUTO_RANGE, TRAMPOLINE bounce,
                               pool/trampoline geometry, VOICE distance model
@@ -56,12 +57,13 @@ src/
     arena.ts                  Procedural arenas: buildArena(roomCode) -> ArenaLayout {name, level, doors,
                               windows, spawns, props, pads, bounds}; DEFAULT_ARENA is the hand-built Stage
     protocol.ts               Binary Writer/Reader, encode/decode for inputs, snapshots, voice
-                              frames; PlayerState/PropState/Input types; VERSION = 4
+                              frames; PlayerState/PropState/Input types; VERSION = 8
     simulation.ts             Rapier world + character motor. THE authority boundary.
                               addPlayer/removePlayer, motor(), step(), restore(), target(),
                               pickup(), release(), shoot(), reload(), respawn(), swing(), honk(),
                               reach(), doorTarget(), toggleDoor(), setDoor(), doorStates(),
-                              syncDoors(), propStates(), syncProps(), eye(), dispose()
+                              syncDoors(), propStates(), syncProps(), supply(),
+                              spawnDrop(), removeDrop(), eye(), dispose()
   net/                        Isomorphic transport layer. No three, no DOM, no node:*.
     channel.ts                Channel interface (send/close/onmessage/onclose, backpressure),
                               constant-time token compare, id and room-code generators
@@ -167,11 +169,14 @@ and how it is carried. Kinds are static and never travel on the wire.
 owns. `GUNS` in `level.ts` is the whole arsenal: one entry per gun kind with its
 range, cooldown, magazine, reload, pellet speed and lifetime, pellets per shot
 and spread, knock, lift, damage scale, stagger, recoil, blast, radius, hold pose,
-muzzle offset, collider and sound. An accepted shot decrements the held gun's
-magazine (auto-reload starts at zero, `R` starts it early) and spawns one live
-pellet per line — a small dynamic Rapier body that flies from the muzzle at the
-gun's speed, gravity off unless the gun arcs (the launcher), and dies on first
-contact, after the gun's lifetime in ticks, or leaving the arena. Impact is
+muzzle offset, collider and sound. Each gun also carries `reloads` spare
+magazines — 2 or 3 — behind its magazine, and those are the gun's own, not the
+player's. An accepted shot decrements the held gun's magazine (auto-reload starts
+at zero while rounds remain, `R` starts it early, and the last reload hands back
+only what was left) and spawns one live pellet per line — a small dynamic Rapier
+body that flies from the muzzle at the gun's speed, gravity off unless the gun
+arcs (the launcher), and dies on first contact, after the gun's lifetime in
+ticks, or leaving the arena. Impact is
 decided by the authority: a hit adds the gun's
 knock/lift to the victim's velocity plus its `stagger` ticks of lost
 footing (a networked `PlayerState` field so the client's replay agrees), and
@@ -182,7 +187,18 @@ goes inert until the next respawn (see `BassSPace Brawl Design Doc.txt`). The
 accepted shot is broadcast for tracers and sound; the shooter draws its own
 tracer immediately and ignores the echo. Cards override the gun, never the wire:
 TRIPLE SHOT adds two pellets to any fan, EXPLOSIVE arms any pellet, HOMING
-curves any round, and a pickup loads the gun's own magazine.
+curves any round, and a pickup loads the gun's own magazine and whatever rounds
+are left inside it — a half-used gun on the floor hands the next player the dregs.
+
+**Resupply.** Guns fall out of the sky through the round (`AIR` in `level.ts`,
+host `airdrop()`): one every `AIR.period` ticks, up to `AIR.max` live at once,
+above a random spawn, cycling `AIR.kinds`. The authority owns the position and
+broadcasts `{type:"airdrop", id, kind, x, y, z}`; the id is a prop id in the
+500–999 band (`DROP_ID_BASE`), so the gun rides the ordinary prop channel and
+snapshots move it like any other prop. Clients build a prediction body and a mesh
+from that message and then treat it as a normal pickup. An untouched gun
+dissolves after `AIR.linger` (`{type:"airdrop-gone", ids}`); the countdown clears
+the sky. A gun thrown with no rounds left hits as dead weight (`AIR.club`).
 
 **Doors.** `DOORS` in `level.ts` lists sliding leaves that live in the physics
 world as kinematic bodies. Hand-worked leaves toggle with `E` when the crosshair
@@ -309,9 +325,10 @@ you are in.
 | --- | --- | --- |
 | Change the room's geometry | `src/shared/level.ts` `LEVEL` | Boxes are both mesh and collider. Metres, Y up. Decorative extras live in `GameScene` constructor. |
 | Move spawns / props | `SPAWNS`, `PROPS` in `level.ts` | Eight spawns; prop ids are index + 1. Give a prop a kind: a gun kind (`gun`, `smg`, `shotgun`, `rifle`, `launcher`, `seeker`), `ball`, `crate`, `bat`, `horn` or junk. Props must rest on solid ground — an unsupported prop falls into the void and makes noise. |
-| Add a prop kind | `PROPS`/`PropKind` in `level.ts`, `shape()` in `simulation.ts`, `makeProp()` in `scene.ts` | Keep children[0] of the mesh group the tintable body — `setHighlight` writes its emissive. |
+| Add a prop kind | `PROPS`/`PropKind` in `level.ts`, `shape()`+`PROP_BOUNCE` in `simulation.ts`, `propMesh()` in `scene.ts` | Keep children[0] of the mesh group the tintable body — `setHighlight` writes its emissive. Guns additionally need a `GUNS` entry. |
 | Add or move a door | `DOORS` in `level.ts` | Leaves slide from `p` to `p + slide`; mount them in front of the wall they cover. `auto` makes them open on approach. |
-| Tune the guns | `GUNS`/`WEAPON` in `level.ts` | Per kind: range, cooldown, magazine, reload, speed, pellets + spread, knock, lift, damage scale, stagger, recoil, blast, hold pose, muzzle offset, collider, sound. `WEAPON` keeps the pistol's numbers and the shared globals (spread, homing steer). |
+| Tune the guns | `GUNS`/`WEAPON` in `level.ts` | Per kind: range, cooldown, magazine, `reloads` spare magazines behind it, reload, speed, pellets + spread, knock, lift, damage scale, stagger, recoil, blast, hold pose, muzzle offset, collider, sound. `WEAPON` keeps the pistol's numbers and the shared globals (spread, homing steer). Rounds belong to the gun: `reserve` rides the tick, `AIR.club` is what a spent gun hits a player with. |
+| Tune supply drops | `AIR` in `level.ts`; `airdrop()` in `host/index.ts`; `spawnDrop()`/`removeDrop()`/`supply()` in `simulation.ts`; `supplyLabels` in `scene.ts` | Drops are props in the 500–999 id band, so they ride the prop channel; the authority owns the position and broadcasts `{type:"airdrop"}` / `{type:"airdrop-gone"}`. Rounds belong to the gun, not the player — a spent gun is a club and the sky is the only refill. |
 | Tune pool / sprinkler / grill hazards | `POOL`, `SLIP`, `GRILL` in `level.ts`; `motor()`/`step()` in `simulation.ts` | Pool entry and launch run in the deterministic motor on both sides; the slip patches cut steering while grounded; the grill booms authority-only. |
 | Tune movement | `Simulation.motor()` | Runs identically on both sides. Gravity is set in the Rapier world **and** the motor's vertical acceleration — change both. |
 | Add or tune an upgrade card | `src/shared/upgrades.ts` (`CARDS`, `buildStats`, `IMPLEMENTED_CARDS`), effects in `simulation.ts` `motor()`/`swing()`/`shoot()`, offers in `host/index.ts` `dealOffers()` | One bit per card in `PlayerState.build`; only ids in `IMPLEMENTED_CARDS` may be dealt. Card order is the wire format — don't reorder or remove entries. |

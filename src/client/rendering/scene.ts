@@ -121,6 +121,12 @@ export class GameScene {
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(68, 1, 0.04, 100);
   props = new Map<number, THREE.Group>();
+  /** Kinds of the guns that fell out of the sky: their ids are above the
+   *  arena's own props, so only the authority's announcement knows them. */
+  dropKinds = new Map<number, PropKind>();
+  /** A floating name over each gun that fell from the sky, so a player can
+   *  tell what is coming down before it lands. Hidden once it is carried. */
+  supplyLabels = new Map<number, HTMLDivElement>();
   doors = new Map<number, THREE.Group>();
   windows = new Map<number, { glass: THREE.Mesh; root: THREE.Group }>();
   /** Shards from shattered panes; they spray out and delete themselves. */
@@ -236,6 +242,9 @@ export class GameScene {
       });
     }
     this.props.clear();
+    this.dropKinds.clear();
+    for (const el of this.supplyLabels.values()) el.remove();
+    this.supplyLabels.clear();
     this.doors.clear();
     this.windows.clear();
     this.front.length = 0;
@@ -532,13 +541,17 @@ export class GameScene {
   }
   /** A throwable prop's visual mesh. Children[0] is always the tintable body: `setHighlight` writes its emissive. */
   makeProp(i: number) {
-    const root = new THREE.Group(),
-      kind = this.arena.props[i].kind;
+    return this.propMesh(this.arena.props[i].kind, i);
+  }
+  /** A prop mesh for any kind. `tint` seeds the palette: the prop's index for
+   *  arena props, the prop's id for a gun that fell out of the sky. */
+  propMesh(kind: PropKind, seed: number) {
+    const root = new THREE.Group();
     if (kind === "ball") {
       const ball = new THREE.Mesh(
         new THREE.SphereGeometry(0.3, 32, 24),
         new THREE.MeshStandardMaterial({
-          color: PALETTE[i % 8],
+          color: PALETTE[seed % 8],
           roughness: 0.42,
         }),
       );
@@ -574,7 +587,7 @@ export class GameScene {
         frame = metal("#414b54", 0.45, 0.45),
         wood = metal("#6b5137", 0.05, 0.8),
         leather = metal("#3b2b22", 0.05, 0.8),
-        tint = metal(PALETTE[i % 8], 0.1, 0.6);
+        tint = metal(PALETTE[seed % 8], 0.1, 0.6);
       const brick = (
         w: number,
         h: number,
@@ -665,9 +678,9 @@ export class GameScene {
             const eye = new THREE.Mesh(
               new THREE.SphereGeometry(0.045, 12, 10),
               new THREE.MeshStandardMaterial({
-                color: PALETTE[i % 8],
+                color: PALETTE[seed % 8],
                 roughness: 0.4,
-                emissive: new THREE.Color(PALETTE[i % 8]),
+                emissive: new THREE.Color(PALETTE[seed % 8]),
                 emissiveIntensity: 0.6,
               }),
             );
@@ -686,7 +699,7 @@ export class GameScene {
       const barrel = new THREE.Mesh(
         new THREE.CylinderGeometry(0.1, 0.055, 0.9, 14),
         new THREE.MeshStandardMaterial({
-          color: PALETTE[i % 8],
+          color: PALETTE[seed % 8],
           roughness: 0.72,
         }),
       );
@@ -763,7 +776,7 @@ export class GameScene {
       return root;
     }
     if (kind === "chair") {
-      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.8 });
+      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[seed % 8], roughness: 0.8 });
       const wood = new THREE.MeshStandardMaterial({ color: "#6c5c46", roughness: 0.8 });
       // The collider is a 0.28 x 0.45 x 0.28 cuboid centred on the root, so at
       // rest the body spans -0.45..+0.45: floor to the top of the backrest.
@@ -791,7 +804,7 @@ export class GameScene {
       return root;
     }
     if (kind === "table") {
-      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.8 });
+      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[seed % 8], roughness: 0.8 });
       const wood = new THREE.MeshStandardMaterial({ color: "#6c5c46", roughness: 0.8 });
       const top = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.08, 0.84), tint);
       top.position.y = 0.34;
@@ -821,7 +834,7 @@ export class GameScene {
       return root;
     }
     if (kind === "trashcan") {
-      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.55, side: THREE.DoubleSide });
+      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[seed % 8], roughness: 0.55, side: THREE.DoubleSide });
       const body = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.17, 0.5, 12, 1, true), tint);
       body.position.y = -0.05;
       body.castShadow = true;
@@ -843,7 +856,7 @@ export class GameScene {
       return root;
     }
     if (kind === "bottle") {
-      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.3 });
+      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[seed % 8], roughness: 0.3 });
       const body = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.3, 12), tint);
       body.position.y = -0.1;
       body.castShadow = true;
@@ -867,7 +880,7 @@ export class GameScene {
       return root;
     }
     if (kind === "bucket") {
-      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.4, metalness: 0.3, side: THREE.DoubleSide });
+      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[seed % 8], roughness: 0.4, metalness: 0.3, side: THREE.DoubleSide });
       const body = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.155, 0.3, 12, 1, true), tint);
       body.position.y = -0.02;
       body.castShadow = true;
@@ -889,7 +902,7 @@ export class GameScene {
       return root;
     }
     const mat = new THREE.MeshStandardMaterial({
-      color: PALETTE[i % 8],
+      color: PALETTE[seed % 8],
       roughness: 0.8,
     });
     // Board crate: the tinted box reads as boards, framed by a dark wood cage
@@ -1158,10 +1171,41 @@ export class GameScene {
       this.effects.push({ mesh: puff, life: 0, ttl: 0.55 + i * 0.06, shrink: false, grow: 1.8 });
     }
   }
+  /** Kind by prop id: the arena's own props first, then guns that fell from the sky. */
+  propKindOf(id: number): PropKind | undefined {
+    return this.dropKinds.get(id) ?? this.arena.props[id - 1]?.kind;
+  }
+  /** Set a sky-dropped gun down in the world; the snapshots move it from here. */
+  addProp(id: number, kind: PropKind, at: { x: number; y: number; z: number }) {
+    const root = this.propMesh(kind, id);
+    root.position.set(at.x, at.y, at.z);
+    this.props.set(id, root);
+    this.dropKinds.set(id, kind);
+    (this.arenaGroup ?? this.scene).add(root);
+    if (isGun(kind)) {
+      const tag = document.createElement("div");
+      tag.className = "supply-tag";
+      tag.dataset.supply = kind;
+      tag.textContent = GUNS[kind].name;
+      this.labels.append(tag);
+      this.supplyLabels.set(id, tag);
+    }
+    return root;
+  }
+  /** Take a sky-dropped gun back out: its mesh, its kind, nothing else. */
+  removeProp(id: number) {
+    const root = this.props.get(id);
+    if (!root) return;
+    this.props.delete(id);
+    this.dropKinds.delete(id);
+    this.supplyLabels.get(id)?.remove();
+    this.supplyLabels.delete(id);
+    root.parent?.remove(root);
+  }
   /** Exact rendered barrel tip, after interpolation, for a tracer with no side gap. */
   muzzle(id: number): Vec3 | undefined {
     const gun = this.props.get(id),
-      kind = this.arena.props[id - 1]?.kind;
+      kind = this.propKindOf(id);
     if (!gun || !isGun(kind)) return;
     gun.updateMatrixWorld(true);
     const p = gun.localToWorld(new THREE.Vector3(0, 0.02, -GUNS[kind].muzzleZ));
@@ -1719,6 +1763,9 @@ export class GameScene {
         position: m.position.clone(),
         rotation: m.quaternion.clone(),
       });
+      const tag = this.supplyLabels.get(p.id);
+      // In someone's hands it needs no tag; back on the ground it grows one.
+      if (tag) tag.hidden = p.owner !== 0;
     }
     for (const [id, m] of [...this.pellets]) {
       if (!seen.has(id)) {
@@ -1826,6 +1873,27 @@ export class GameScene {
         Math.abs(p.y) < 1;
       a.label.style.display = visible ? "block" : "none";
       a.label.style.transform = `translate(-50%,-100%) translate(${(p.x * 0.5 + 0.5) * innerWidth}px,${(-p.y * 0.5 + 0.5) * innerHeight}px)`;
+    }
+    // The sky-dropped guns get the same treatment: a name hovering over them
+    // so a scramble for a fresh gun has something to aim at.
+    const tagPos = new THREE.Vector3();
+    for (const [id, el] of this.supplyLabels) {
+      const mesh = this.props.get(id);
+      if (!mesh || el.hidden) {
+        el.style.display = "none";
+        continue;
+      }
+      mesh.getWorldPosition(tagPos);
+      tagPos.y += 0.7;
+      tagPos.project(this.camera);
+      const visible =
+        this.playing &&
+        tagPos.z < 1 &&
+        tagPos.z > -1 &&
+        Math.abs(tagPos.x) < 1 &&
+        Math.abs(tagPos.y) < 1;
+      el.style.display = visible ? "block" : "none";
+      if (visible) el.style.transform = `translate(-50%,-100%) translate(${(tagPos.x * 0.5 + 0.5) * innerWidth}px,${(-tagPos.y * 0.5 + 0.5) * innerHeight}px)`;
     }
     this.renderer.render(this.scene, this.camera);
   }

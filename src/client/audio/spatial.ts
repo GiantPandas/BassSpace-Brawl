@@ -34,6 +34,16 @@ const EFFECTS: Record<string, EffectSpec> = {
     cutoff: 2600,
     type: "triangle",
   },
+  // A supply gun coming in from the sky: a long descending whistle.
+  drop: {
+    volume: 0.13,
+    duration: 0.5,
+    from: 1400,
+    to: 240,
+    noise: 0.5,
+    cutoff: 1500,
+    type: "triangle",
+  },
   shoot: {
     volume: 0.3,
     duration: 0.17,

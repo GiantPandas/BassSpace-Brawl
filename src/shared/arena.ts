@@ -461,3 +461,26 @@ export const buildArena = (seed: string): ArenaLayout => {
     bounds: { minX: minX - 2.5, maxX: maxX + 2.5, minZ: minZ - 2.5, maxZ: maxZ + 2.5 },
   };
 };
+
+/**
+ * Top of the highest surface under a point that is no higher than `maxTop`,
+ * or null when the point hangs over the void. Level boxes are both mesh and
+ * collider, so their top is exactly where a falling prop comes to rest; the
+ * cap keeps a tall wall from reading as ground.
+ */
+export function groundAt(
+  arena: ArenaLayout,
+  x: number,
+  z: number,
+  maxTop = Infinity,
+): number | null {
+  let top: number | null = null;
+  for (const b of arena.level) {
+    const t = b.p[1] + b.s[1] / 2;
+    if (t > maxTop) continue;
+    if (Math.abs(x - b.p[0]) > b.s[0] / 2 || Math.abs(z - b.p[2]) > b.s[2] / 2)
+      continue;
+    if (top === null || t > top) top = t;
+  }
+  return top;
+}

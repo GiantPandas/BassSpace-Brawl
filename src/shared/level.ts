@@ -225,6 +225,11 @@ export type GunSpec = {
   cooldown: number;
   /** Rounds per magazine. */
   ammo: number;
+  /** Spare magazines the gun carries for itself. Reloads take rounds from
+   * those, and when they run out the gun is empty — worth throwing, not
+   * firing. The supply belongs to the gun, so a half-used gun on the floor
+   * hands the next player what is left of it. */
+  reloads: number;
   /** Ticks to refill it; QUICK DRAW still shortens this. */
   reload: number;
   /** Muzzle speed of a pellet, metres per second. */
@@ -268,6 +273,7 @@ export const GUNS: Record<GunKind, GunSpec> = {
     range: WEAPON.range,
     cooldown: WEAPON.cooldown,
     ammo: WEAPON.ammo,
+    reloads: 2,
     reload: WEAPON.reload,
     pelletSpeed: WEAPON.pelletSpeed,
     pelletsLive: WEAPON.pelletsLive,
@@ -299,6 +305,7 @@ export const GUNS: Record<GunKind, GunSpec> = {
     range: 14,
     cooldown: 7,
     ammo: 26,
+    reloads: 2,
     reload: 130,
     pelletSpeed: 26,
     pelletsLive: 90,
@@ -325,6 +332,7 @@ export const GUNS: Record<GunKind, GunSpec> = {
     range: 11,
     cooldown: 44,
     ammo: 4,
+    reloads: 3,
     reload: 140,
     pelletSpeed: 22,
     pelletsLive: 45,
@@ -351,6 +359,7 @@ export const GUNS: Record<GunKind, GunSpec> = {
     range: 34,
     cooldown: 40,
     ammo: 5,
+    reloads: 3,
     reload: 150,
     pelletSpeed: 46,
     pelletsLive: 220,
@@ -377,6 +386,7 @@ export const GUNS: Record<GunKind, GunSpec> = {
     range: 22,
     cooldown: 95,
     ammo: 2,
+    reloads: 2,
     reload: 180,
     pelletSpeed: 17,
     pelletsLive: 240,
@@ -404,6 +414,7 @@ export const GUNS: Record<GunKind, GunSpec> = {
     cooldown: 52,
     ammo: 3,
     reload: 160,
+    reloads: 2,
     pelletSpeed: 14,
     pelletsLive: 300,
     pellets: 3,
@@ -431,10 +442,38 @@ export function isGun(kind: PropKind | undefined): kind is GunKind {
 /** Rounds the held gun holds, for an empty trigger with no gun in hand. */
 export const magazineOf = (kind: PropKind | undefined) =>
   isGun(kind) ? GUNS[kind].ammo : WEAPON.ammo;
+/** Spare rounds a fresh gun of this kind carries behind its magazine: this is
+ *  what a reload takes from, and once it is gone the gun is spent. */
+export const reserveOf = (kind: GunKind) => GUNS[kind].ammo * GUNS[kind].reloads;
 /** How long a gun's reload takes in ticks under a build's reload scale
  *  (QUICK DRAW hands in 0.6 of the pistol's), scaled to each magazine. */
 export const gunReloadTicks = (gun: GunSpec, reloadTicks: number) =>
   Math.max(1, Math.round((gun.reload * reloadTicks) / WEAPON.reload));
+/**
+ * Guns fall out of the sky through the round. The arena's own guns run dry
+ * (each carries only `reloads` spare magazines), so the drops are what keep a
+ * fight going: one gun appears every `period` ticks, up to `max` at once, and
+ * an untouched one dissolves after `linger`.
+ */
+export const AIR = {
+  /** Ticks between drops at 60 Hz. */
+  period: 9 * 60,
+  /** Metres above the landing point a gun appears. */
+  height: 7.5,
+  /** How far off a spawn it may land, metres. */
+  scatter: 1.3,
+  /** How far off the spawn's own floor the landing may be, metres. Anything
+   *  further is a wall top or the void: try again. */
+  maxDrop: 1.6,
+  /** Drop at most this many guns at once. */
+  max: 4,
+  /** Ticks an untouched gun lies in the open before it dissolves. */
+  linger: 45 * 60,
+  /** HP scale for a thrown gun that is completely empty: dead weight as a club. */
+  club: 1.8,
+  /** The rotation drops cycle through, so a round sees every gun. */
+  kinds: ["smg", "shotgun", "rifle", "gun", "seeker", "launcher"] as GunKind[],
+};
 /** Short-range, authority-owned shove from a baseball bat. */
 export const MELEE = {
   range: 2.35,

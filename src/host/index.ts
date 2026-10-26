@@ -8,8 +8,8 @@ import {
   type Input,
   type PropState,
 } from "../shared/protocol.js";
-import { MAX_PLAYERS, STEP } from "../shared/level.js";
-import { buildArena } from "../shared/arena.js";
+import { AIR, MAX_PLAYERS, STEP } from "../shared/level.js";
+import { buildArena, groundAt } from "../shared/arena.js";
 import {
   MATCH,
   assignTeams,
@@ -97,6 +97,12 @@ type Room = {
   teamWins: [number, number];
   wins: Map<number, number>;
   emptySince: number;
+  /** Guns that fell out of the sky this round: prop id → tick they appeared.
+   *  An entry goes away when someone picks the gun up. */
+  air: Map<number, number>;
+  /** Which gun falls next (index into `AIR.kinds`) and when the last one fell. */
+  airIndex: number;
+  airTick: number;
 };
 const key = (a: number, b: number) => [a, b].sort((x, y) => x - y).join(":");
 const send = (ws: Channel | null, data: unknown) => {
@@ -191,6 +197,12 @@ export async function createHost(options: { maxRooms?: number } = {}) {
   }
   function startCountdown(r: Room) {
     r.sim.respawn();
+    // The sky is empty again for the next round. Anything still falling is
+    // retired; a gun a player kept is theirs now and stays on the ground.
+    const gone: number[] = [];
+    for (const id of [...r.air.keys()]) if (r.sim.removeDrop(id)) gone.push(id);
+    r.air.clear();
+    if (gone.length) broadcast(r, { type: "airdrop-gone", ids: gone });
     // Chaos rolls its per-round env modifier; every other mode resets it.
     r.sim.setEnv(envFor(r));
     r.match.phase = "countdown";
@@ -202,7 +214,53 @@ export async function createHost(options: { maxRooms?: number } = {}) {
     r.sim.setEnv(envFor(r));
     r.match.phase = "round";
     r.match.until = r.tick + MATCH.roundTicks;
+    r.airTick = r.tick;
     broadcast(r, matchInfo(r));
+  }
+  /**
+   * One gun falls out of the sky every `AIR.period` ticks of a live round. The
+   * arena's own guns run dry — each carries only its spare magazines — so the
+   * drops are what keep a fight armed. Where it lands is the authority's own
+   * guess and rides the broadcast: no client derives anything.
+   */
+  function airdrop(r: Room) {
+    for (const [id, born] of [...r.air]) {
+      // Picked up, it is an ordinary prop from then on; untouched, it dissolves.
+      if (r.sim.owners.get(id)) r.air.delete(id);
+      else if (r.tick - born > AIR.linger) {
+        if (r.sim.removeDrop(id))
+          broadcast(r, { type: "airdrop-gone", ids: [id] });
+        r.air.delete(id);
+      }
+    }
+    if (r.air.size >= AIR.max || r.tick - r.airTick < AIR.period) return;
+    const arena = r.sim.arena,
+      spawn = arena.spawns[Math.floor(Math.random() * arena.spawns.length)],
+      // Spawn points sit at a player's eye height, so find the floor under the
+      // spawn first: a scattered landing point only counts when ground is
+      // under it too, or the gun falls into the void and the drop is wasted.
+      floor =
+        groundAt(arena, spawn[0], spawn[2], spawn[1] + 1) ?? spawn[1] - 1;
+    let x = spawn[0],
+      z = spawn[2],
+      ground = floor;
+    for (let i = 0; i < 6; i++) {
+      const cx = spawn[0] + (Math.random() - 0.5) * 2 * AIR.scatter,
+        cz = spawn[2] + (Math.random() - 0.5) * 2 * AIR.scatter,
+        top = groundAt(arena, cx, cz, floor + AIR.maxDrop);
+      if (top !== null && top >= floor - AIR.maxDrop) {
+        x = cx;
+        z = cz;
+        ground = top;
+        break;
+      }
+    }
+    const y = ground + AIR.height,
+      kind = AIR.kinds[r.airIndex++ % AIR.kinds.length],
+      id = r.sim.spawnDrop(kind, { x, y, z });
+    r.air.set(id, r.tick);
+    r.airTick = r.tick;
+    broadcast(r, { type: "airdrop", id, kind, x, y, z });
   }
   function endRound(r: Room) {
     const alive = [...r.sim.players.values()].filter((c) => !c.state.out);
@@ -374,6 +432,9 @@ export async function createHost(options: { maxRooms?: number } = {}) {
         teamWins: [0, 0],
         wins: new Map(),
         emptySince: 0,
+        air: new Map(),
+        airIndex: 0,
+        airTick: 0,
       };
       rooms.set(code, room);
     }
@@ -845,6 +906,7 @@ export async function createHost(options: { maxRooms?: number } = {}) {
             (c) => !c.state.out,
           ).length;
           if (alive <= 1 || room.tick >= room.match.until) endRound(room);
+          else airdrop(room);
         } else if (
           room.match.phase === "break" ||
           room.match.phase === "build"
@@ -912,6 +974,13 @@ export async function createHost(options: { maxRooms?: number } = {}) {
         // Chaos explosions are told once; the shove rides the next snapshot.
         for (const e of room.sim.explosionEvents.splice(0))
           broadcast(room, { type: "explosion", ...e });
+        // A gun that missed the arena is retired: the linger timer has nothing
+        // to wait for any more, and clients are told to stop drawing it.
+        if (room.sim.dropEvents.length) {
+          const gone = room.sim.dropEvents.splice(0);
+          for (const id of gone) room.air.delete(id);
+          broadcast(room, { type: "airdrop-gone", ids: gone });
+        }
         // Impacts worth hearing ride one compact message per tick; nothing in
         // it is physics state — clients only play sound and sparks from it.
         if (room.sim.impactEvents.length) {

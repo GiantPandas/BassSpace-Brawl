@@ -65,10 +65,11 @@ airborne arc on the authority. The block bit raises the shield bubble for
 Header: version u8, type u8, full flag u8, server tick u32, baseline tick u32,
 player count u8, changed-prop count u16.
 
-Each player record is 50 bytes: ID u16, position 3×f32, velocity 3×f32,
+Each player record is 51 bytes: ID u16, position 3×f32, velocity 3×f32,
 yaw/pitch 2×i16 scaled by π/32767, state flags u8, held-item ID u16, stagger
 u8, air jumps `jumps` u8, health `hp` u8, eliminated flag `out` u8,
-magazine `ammo` u8, upgrade build `build` u32, acknowledged input sequence
+magazine `ammo` u8, spare rounds `reserve` u8, upgrade build `build` u32,
+acknowledged input sequence
 u32, pool timer `pool` u8, pool launch timer `launch` u8, shield ticks `block`
 u8, shield cooldown `cool` u8. Flags encode grounded, crouched, sprinting, and prior jump-button state
 for edge-triggered
@@ -93,6 +94,12 @@ on either side and is deflected back toward its source by the authority. Version
 7 adds `cool`, the ticks left before the next raise: the raise also starts it,
 both sides run the same motor countdown, and a raise seen while `cool` runs is
 ignored, so client and authority agree on when the next bubble may go up.
+Version 8 adds `reserve`, the rounds left behind the magazine of the gun in hand:
+`GUNS[kind].reloads` magazines when the gun is fresh, drained one magazine per
+reload the authority completes. Zero means the gun is spent — it reloads nothing,
+fires nothing, and throwing it hits as dead weight (`AIR.club`). The supply
+belongs to the gun and not to the player: releasing or dropping a gun stores what
+is left of it, and picking one up adopts those numbers.
 
 Each prop record is 18 bytes: ID u16, position 3×i16 in centimeters,
 quaternion 4×i16 scaled by 32767, owner u16 (0 = free). Normalize reconstructed
@@ -124,8 +131,10 @@ range.
 `{type:"action-result", request, action, accepted}`.
 
 `shoot` requires a held gun with `ammo > 0` and a server-owned cooldown of that
-gun's `cooldown` ticks. `GUNS` in `level.ts` is the whole arsenal — magazine,
-reload, range, pellet speed and lifetime, pellets per shot and spread, knock,
+gun's `cooldown` ticks; a dry trigger reloads only while `reserve` (the gun's own
+spare rounds) is above zero. `GUNS` in `level.ts` is the whole arsenal — magazine,
+`reloads`, reload, range, pellet speed and lifetime, pellets per shot and spread,
+knock,
 lift, damage scale, stagger, recoil, blast, gravity arc, radius and sound per
 kind — and which gun is in hand is derived from `object`, never sent: kinds are
 static and both sides read the same arena. An accepted shot decrements `ammo` and
@@ -144,8 +153,19 @@ dx, dy, dz, distance, hit, pellet}` — the muzzle origin and direction the clie
 draw the tracer from, with `pellet` the live prop's new ID and `dirs` the fan's
 directions whenever the gun fires more than one round. Cards override the gun
 without touching the wire: TRIPLE SHOT adds two pellets to any fan, HOMING curves
-any round, and picking a gun up loads its own magazine. A shooter draws its
+any round, and picking a gun up loads its own magazine and whatever rounds are
+left inside it. A shooter draws its
 own tracer on the trigger press and ignores the echo of its own shot.
+
+Resupply is authority-side and rides the JSON channel: every `AIR.period` ticks
+of a live round the host drops one gun (up to `AIR.max` at once) above a spawn
+and broadcasts `{type:"airdrop", id, kind, x, y, z}`. The id is a prop id in the
+500–999 band — above the arena's own props, below the pellets — so the gun
+travels on the ordinary prop channel and every snapshot moves it. Clients create
+a prediction body and a mesh from that message; nothing else is derived
+client-side. An untouched gun dissolves after `AIR.linger` ticks and everyone
+gets `{type:"airdrop-gone", ids}`; a gun someone picked up is an ordinary prop
+from then on, and the countdown retires whatever is left in the air.
 
 `swing` requires a held bat and uses an authority-owned swept sphere over the
 short `MELEE.range`; a struck player gets the same kind of shove and stagger as

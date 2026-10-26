@@ -20,6 +20,9 @@ export type PlayerState = {
   out: number;
   /** Pellets left in the magazine, as the authority last said. */
   ammo: number;
+  /** Rounds left behind that magazine for the gun in hand; zero means the gun
+   * is spent and only good for throwing. */
+  reserve: number;
   /** Bitmask of picked upgrade-card indices in CARDS; survives respawns. */
   build: number;
   ack: number;
@@ -59,7 +62,8 @@ export type Input = {
   buttons: number;
 };
 export const BUTTON = { JUMP: 1, SPRINT: 2, CROUCH: 4, DASH: 8, BLOCK: 16 };
-export const VERSION = 7;
+/** Wire version. 8 adds the gun's spare rounds (`reserve`) to the player record. */
+export const VERSION = 8;
 export class Writer {
   buffer = new ArrayBuffer(16384);
   v = new DataView(this.buffer);
@@ -187,6 +191,7 @@ export function encodeSnapshot(s: Snapshot) {
       .u8(Math.max(0, Math.min(255, p.hp)))
       .u8(p.out ? 1 : 0)
       .u8(Math.max(0, Math.min(255, p.ammo)))
+      .u8(Math.max(0, Math.min(255, p.reserve)))
       .u32(p.build)
       .u32(p.ack)
       .u8(Math.max(0, Math.min(255, p.pool)))
@@ -234,6 +239,7 @@ export function decodeSnapshot(b: ArrayBuffer): Snapshot {
       hp: r.u8(),
       out: r.u8(),
       ammo: r.u8(),
+      reserve: r.u8(),
       build: r.u32(),
       ack: r.u32(),
       pool: r.u8(),

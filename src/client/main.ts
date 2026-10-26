@@ -63,7 +63,10 @@ const scene = new GameScene($("world"));
 // The room's arena: the Stage until a welcome brings the generated layout.
 let arena = DEFAULT_ARENA;
 /** Prop kind by id for the current arena — ids are positions in `arena.props`. */
-const kindOf = (id: number) => arena.props[id - 1]?.kind;
+/** Prop kind by id: the arena's own props, then the guns that fell out of the
+ *  sky — the scene knows those because the authority announced them. */
+const kindOf = (id: number) =>
+  arena.props[id - 1]?.kind ?? scene.dropKinds.get(id);
 /** What to call a prop in the HUD: guns read as the model on the tin. */
 const propLabel = (kind: PropKind | undefined) => (isGun(kind) ? GUNS[kind].name : kind);
 /** Anything the mouse button uses: any gun, the bat, the horn. */
@@ -514,6 +517,26 @@ async function connect() {
           );
         }
       }
+      // A gun fell out of the sky — the round's resupply. The authority owns
+      // where it landed; we only need a prediction body and a mesh so the
+      // snapshots can move it, and the usual pickup rules apply to it from
+      // there. It costs the player whatever rounds the gun still has.
+      if (m.type === "airdrop") {
+        const at = { x: m.x, y: m.y, z: m.z },
+          kind = m.kind as PropKind;
+        if (isGun(kind)) {
+          sim?.spawnDrop(kind, at, m.id);
+          scene.addProp(m.id, kind, at);
+          voice.spatial?.effect(at, "drop");
+          toast(`${GUNS[kind].name} fell from the sky`);
+        }
+      }
+      if (m.type === "airdrop-gone") {
+        for (const pid of m.ids ?? []) {
+          scene.removeProp(pid);
+          sim?.removeDrop(pid);
+        }
+      }
       if (m.type === "explosion") {
         scene.boomAt(m.x, m.y, m.z);
         voice.spatial?.effect({ x: m.x, y: m.y, z: m.z }, "boom");
@@ -895,14 +918,19 @@ addEventListener("keydown", (e) => {
   if (!e.repeat && e.code === "KeyR") {
     send({ type: "action", request: ++action, action: "reload" });
     const gun = local ? kindOf(local.state.held) : undefined;
-    reloadUntil =
-      performance.now() +
-      gunReloadTicks(
-        isGun(gun) ? GUNS[gun] : GUNS.gun,
-        buildStats(local?.state.build ?? 0).reloadTicks,
-      ) *
-        STEP *
-        1000;
+    // Paint the wait only when the authority will really reload: a full
+    // magazine refuses, and so does a gun with no spare rounds left.
+    if (
+      isGun(gun) &&
+      local &&
+      local.state.reserve > 0 &&
+      local.state.ammo < GUNS[gun].ammo
+    )
+      reloadUntil =
+        performance.now() +
+        gunReloadTicks(GUNS[gun], buildStats(local.state.build).reloadTicks) *
+          STEP *
+          1000;
   }
   // Emotes ride Digit1..4, bound to whatever is equipped in the locker.
   if (!e.repeat && e.code.startsWith("Digit")) {
@@ -1345,10 +1373,15 @@ function frame(now: number) {
     const heldKind = kindOf(s.held);
     $("ammo").hidden = !isGun(heldKind);
     if (isGun(heldKind))
+      // Every gun carries its own magazine and a finite stack of spare rounds
+      // behind it; when the stack is gone the gun is spent and only good for
+      // throwing, which the HUD says out loud.
       $("ammo").textContent =
         s.ammo > 0
-          ? `${GUNS[heldKind].name} · ${s.ammo}/${magazineOf(heldKind)}`
-          : "RELOADING";
+          ? `${GUNS[heldKind].name} · ${s.ammo}/${magazineOf(heldKind)} · ${s.reserve} left`
+          : s.reserve > 0
+            ? "RELOADING"
+            : "EMPTY · THROW IT";
     // The bubble is on the avatar — invisible from the default first-person
     // seat — so the HUD carries the state: full green bar while it is up,
     // amber progress while the cooldown behind it recharges.
