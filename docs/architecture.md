@@ -210,6 +210,18 @@ and the healthiest survivor wins (a tie goes to the lower ID). After the final
 round the match winner is whoever took the most rounds. Player slots and IDs
 persist across rounds; reconnecting restores the same player.
 
+During a break the authority deals each connected member `MATCH.cardsOffered`
+cards they do not already own and puts that deal on the wire as
+`offers: [{id, cards}]` on the same `match` broadcast. A `{type:"pick", card}`
+message claims one card from it; the authority validates the phase, the deal and
+the bitmask, then answers `{type:"pick-result", accepted, card}` and
+rebroadcasts the match state. One card per break: once the member owns anything
+from the current deal, further picks come back `accepted: false`. The build
+itself never needs its own message — it rides the tick as the `build` bitmask in
+the player record. The break ends when every connected member holds a card from
+the deal, or at `until`, when a random card is handed to whoever is still
+browsing.
+
 ### Game modes
 
 The machine runs in one of six modes, all defined in `src/shared/match.ts`:

@@ -547,21 +547,28 @@ export async function createHost(options: { maxRooms?: number } = {}) {
           return;
         }
         if (msg.type === "pick") {
-          // Quietly refuse anything that is not on the board right now.
+          // One card per break (design doc §2): the board locks as soon as
+          // anything from this deal is taken, so a second click is refused.
+          // Every answer names the card back — the client marks the button the
+          // moment it sends and needs to know which one to unmark. Echo the
+          // normalised id only: refuse to bounce back whatever was sent.
+          const card = typeof msg.card === "string" ? msg.card : "",
+            build = member.build,
+            locked = member.offer.some((id) => build & cardBit(id));
           if (
             room.match.phase !== "break" ||
-            typeof msg.card !== "string" ||
-            !IMPLEMENTED_CARDS.has(msg.card) ||
-            !member.offer.includes(msg.card) ||
-            member.build & cardBit(msg.card)
+            !IMPLEMENTED_CARDS.has(card) ||
+            locked ||
+            !member.offer.includes(card) ||
+            member.build & cardBit(card)
           ) {
-            send(ws, { type: "pick-result", accepted: false });
+            send(ws, { type: "pick-result", accepted: false, card });
             return;
           }
-          member.build |= cardBit(msg.card);
+          member.build |= cardBit(card);
           const c = room.sim.players.get(member.id);
           if (c) c.state.build = member.build;
-          send(ws, { type: "pick-result", accepted: true });
+          send(ws, { type: "pick-result", accepted: true, card });
           broadcast(room, matchInfo(room));
           return;
         }

@@ -41,7 +41,7 @@ $("app").innerHTML = `<div id="world"></div><div id="shade" class="shade"></div>
 <header class="topbar"><button id="about-button" class="brand" aria-label="About BassSpace Brawl"><span class="brand-mark"><svg viewBox="0 0 192 192" aria-hidden="true"><rect x="17" y="17" width="158" height="158" rx="46" fill="#2b2545" transform="rotate(-11 96 96)"/><g stroke="#c9f24f" stroke-width="13" stroke-linecap="round" fill="none"><path d="M107.8 62.6A52 52 0 0 1 107.8 129.4"/><path d="M133.5 50.1A80 80 0 0 1 133.5 141.9"/></g><circle cx="68" cy="96" r="30" fill="#c9f24f"/><circle cx="68" cy="96" r="13" fill="#2b2545"/></svg></span><span class="brand-word">bassspace <b>brawl</b></span><small></small></button><div id="top-actions" class="top-actions"><span id="net-mode" class="pill net-mode" hidden><i class="dot"></i> <span id="net-mode-text"></span></span><button id="help-button" class="icon-button" aria-label="Controls and help">?</button></div></header>
 <main id="lobby" class="lobby"><div class="eyebrow">2–8 players · an arena shaped by the room code</div><h1><span class="line"><span>Turn the bass up.</span></span><span class="line"><span>Throw them <em>out.</em></span></span></h1><p class="intro">Shove guns, throwable furniture and upgrades that break every round.<br>Built with Three.js, Rapier physics, and proximity voice.</p><a class="github-button" href="https://github.com/larshurrelb/friendslop-base" target="_blank" rel="noopener noreferrer" aria-label="Get BassSpace Brawl on GitHub">Get it on GitHub <span class="github-arrow" aria-hidden="true">↗</span></a><form id="entry" class="entry-card"><label for="name">WHAT SHOULD WE CALL YOU?</label><div class="name-input"><div class="avatar-chip">✳</div><input id="name" aria-label="Your name" autocomplete="nickname" maxlength="20" placeholder="Your name" required value="Guest"></div><button class="primary" id="create" type="submit">Create a room <span>↗</span></button><div class="separator">or find your friends</div><div class="join-row"><input id="join-code" aria-label="Room code" placeholder="ROOM CODE" maxlength="6" autocomplete="off"><button id="join" type="button">Join →</button></div><div class="entry-note">No accounts. Just a room code.</div><p id="entry-error" class="error" hidden></p></form><div class="lobby-foot"><span>2–8 players</span><span>Proximity voice</span><span>Cards between rounds</span></div><p class="mobile-notice">A keyboard and mouse are required to play.</p></main>
 <footer id="footer" class="footer"><span>Every round makes the brawl worse.</span><span class="version">BASSSPACE BRAWL &nbsp; / &nbsp; v0.1</span></footer>
-<div id="hud" class="hud" hidden><div class="room-bar"><div><small>YOUR ROOM</small><span id="room-code" class="room-code">------</span></div><button id="copy-room" aria-label="Copy room invite">Copy invite ↗</button><span id="player-count" class="count">1 / 8</span><span id="match-timer" class="count"></span><span id="bucks" class="count" title="Bucks — win rounds to earn more">💰 0</span><select id="mode-select" aria-label="Game mode" hidden><option value="ffa">Free for all</option><option value="teams-2">Teams 2v2</option><option value="teams-3">Teams 3v3</option><option value="teams-4">Teams 4v4</option><option value="king">King of the Yard</option><option value="chaos">Chaos Mode</option></select><button id="ready-button">Ready up</button></div><div id="ammo" class="ammo" hidden></div><div id="crosshair" class="crosshair"></div><div id="shield-gauge" class="shield-gauge" hidden></div><div id="hitflash" class="hitflash"></div><div id="interact" class="interact" hidden></div><div class="bottom-left"><span class="zone-icon">◈</span><div><div id="zone-name" class="zone-name">The stage</div><div id="zone-desc" class="zone-desc">CENTER RING · OPEN SKY</div></div></div><div class="voice-controls"><button id="enable-voice">Enable voice</button><button id="mute" hidden aria-label="Mute microphone">Mic on</button><select id="voice-mode" aria-label="Microphone mode"><option value="open">Open mic</option><option value="ptt">Push to talk</option></select><span id="speaking-light" class="speaking-light"></span></div><div class="bottom-right"><button id="locker-button">Locker <span>✦</span></button><button id="friends-button">Friends <span id="friend-number">1</span></button><button id="debug-button">Diagnostics <span>⌁</span></button></div><div id="pause" class="pause"><div class="eyebrow" style="justify-content:center">The stage is open</div><h2>Break something.</h2><p>Test the weapons and break the furniture.<br>Then ready up and start the brawl.</p><button id="resume" class="primary">Click to explore →</button><small>WASD to move · Mouse to look · Esc to pause</small></div><div id="countdown" class="countdown" hidden></div><div id="round-banner" class="banner" hidden></div><div id="build" class="build" hidden><div class="eyebrow">CHOOSE AN UPGRADE</div><div id="build-cards" class="build-cards"></div></div></div>
+<div id="hud" class="hud" hidden><div class="room-bar"><div><small>YOUR ROOM</small><span id="room-code" class="room-code">------</span></div><button id="copy-room" aria-label="Copy room invite">Copy invite ↗</button><span id="player-count" class="count">1 / 8</span><span id="match-timer" class="count"></span><span id="bucks" class="count" title="Bucks — win rounds to earn more">💰 0</span><select id="mode-select" aria-label="Game mode" hidden><option value="ffa">Free for all</option><option value="teams-2">Teams 2v2</option><option value="teams-3">Teams 3v3</option><option value="teams-4">Teams 4v4</option><option value="king">King of the Yard</option><option value="chaos">Chaos Mode</option></select><button id="ready-button">Ready up</button></div><div id="ammo" class="ammo" hidden></div><div id="crosshair" class="crosshair"></div><div id="shield-gauge" class="shield-gauge" hidden></div><div id="hitflash" class="hitflash"></div><div id="interact" class="interact" hidden></div><div class="bottom-left"><span class="zone-icon">◈</span><div><div id="zone-name" class="zone-name">The stage</div><div id="zone-desc" class="zone-desc">CENTER RING · OPEN SKY</div></div></div><div class="voice-controls"><button id="enable-voice">Enable voice</button><button id="mute" hidden aria-label="Mute microphone">Mic on</button><select id="voice-mode" aria-label="Microphone mode"><option value="open">Open mic</option><option value="ptt">Push to talk</option></select><span id="speaking-light" class="speaking-light"></span></div><div class="bottom-right"><button id="locker-button">Locker <span>✦</span></button><button id="friends-button">Friends <span id="friend-number">1</span></button><button id="debug-button">Diagnostics <span>⌁</span></button></div><div id="pause" class="pause"><div class="eyebrow" style="justify-content:center">The stage is open</div><h2>Break something.</h2><p>Test the weapons and break the furniture.<br>Then ready up and start the brawl.</p><button id="resume" class="primary">Click to explore →</button><small>WASD to move · Mouse to look · Esc to pause</small></div><div id="countdown" class="countdown" hidden></div><div id="round-banner" class="banner" hidden></div><div id="build" class="build" hidden><div class="eyebrow" id="build-title">CHOOSE AN UPGRADE</div><div id="build-cards" class="build-cards"></div><div id="build-taken" class="build-taken" hidden></div></div></div>
 <aside id="friends" class="drawer" hidden><button class="close" data-close="friends" aria-label="Close friends">×</button><h3>In good company</h3><div id="member-list"></div><button id="solo-tab" class="primary">Open a second player <span>↗</span></button><p class="debug-note">Test solo in another tab. Use headphones when testing microphones.</p><button id="leave" class="primary" style="background:transparent;color:#8f88ad;border-color:#cfcbdd">Leave room</button></aside>
 <aside id="debug" class="drawer" hidden><button class="close" data-close="debug" aria-label="Close diagnostics">×</button><h3>Under the hood</h3><div id="metrics" class="metrics"></div><div id="peer-debug"></div><p id="codec-status" class="debug-note"></p><p id="net-detail" class="debug-note"></p></aside>
 <aside id="help" class="drawer" hidden><button class="close" data-close="help" aria-label="Close help">×</button><h3>A little field guide</h3><div class="help-grid"><div><kbd class="key">W A S D</kbd></div><span>Move around</span><div><kbd class="key">Mouse</kbd></div><span>Look around</span><div><kbd class="key">Tab</kbd></div><span>First / third person</span><div><kbd class="key">Shift</kbd></div><span>Sprint</span><div><kbd class="key">Ctrl / C</kbd></div><span>Crouch</span><div><kbd class="key">Space</kbd></div><span>Jump</span><div><kbd class="key">E</kbd></div><span>Pick up / drop</span><div><kbd class="key">Q</kbd></div><span>Throw held object</span><div><kbd class="key">B</kbd></div><span>Air dash (with the card)</span><div><kbd class="key">1 – 4</kbd></div><span>Play a bound emote</span><div><kbd class="key">Click / F</kbd></div><span>Fire, swing or honk</span><div><kbd class="key">Right click</kbd></div><span>Raise shield bubble — deflects shots and throws; 4 s cooldown</span><div><kbd class="key">V</kbd></div><span>Push to talk</span><div><kbd class="key">M</kbd></div><span>Mute microphone</span><div><kbd class="key">Esc</kbd></div><span>Release mouse</span></div><p class="about-copy">Voices carry across the open sky; the void under the stage carries nothing back.</p><p class="about-copy">Bounce pads fling you onto the perches. Hits drain health and launch you — the edge of the stage and the void below finish the job.</p></aside>
@@ -140,6 +140,10 @@ let match: {
   modifier?: string;
 } | null = null,
   matchUi = "";
+// The card claimed during the current break. It marks itself the moment it is
+// sent and is dropped if the authority refuses it — one card per break
+// (design doc §2), so the whole board locks on the first click.
+let pick: { card: string; sent: number } | null = null;
 const keys = new Set<string>(),
   ballHeights = new Map<number, { y: number; dy: number }>(),
   outStates = new Map<number, { out: number; hp: number }>(),
@@ -526,6 +530,18 @@ async function connect() {
               ? "That door will not budge from here."
               : "That object is out of reach or already held.",
         );
+      if (m.type === "pick-result") {
+        // The button is already marked; this only confirms it or hands the
+        // click back so the board is live again.
+        const card = CARDS.find((c) => c.id === m.card);
+        if (m.accepted) {
+          if (pick?.card === m.card) pick = null;
+          toast(card ? `Locked in: ${card.name}` : "Upgrade locked in");
+        } else if (pick?.card === m.card) {
+          pick = null;
+          toast("That card is not on your board. Pick another.");
+        }
+      }
       if (m.type === "error") {
         $("entry-error").textContent = m.message;
         $("entry-error").hidden = false;
@@ -1103,9 +1119,17 @@ function updateMatchUI() {
     match.phase === "break"
       ? (match.offers?.find((o) => o.id === id)?.cards ?? [])
       : [];
-  const buildTaken = mine.filter(
-    (c) => (local?.state.build ?? 0) & cardBit(c),
-  ).length;
+  const buildBits = local?.state.build ?? 0;
+  const owned = (cardId: string) => !!(buildBits & cardBit(cardId));
+  // An in-flight claim settles when the tick carries it, when a fresh deal
+  // arrives, or when the authority's reply has had its chance and not come.
+  if (match.phase !== "break" || !mine.includes(pick?.card ?? "")) pick = null;
+  else if (pick && (owned(pick.card) || performance.now() - pick.sent > 900))
+    pick = null;
+  // Everything this player has stacked so far, in card order.
+  const stack = CARDS.filter((c) => buildBits & cardBit(c.id)).map(
+    (c) => c.name,
+  );
   const key = [
     match.phase,
     match.round,
@@ -1113,7 +1137,8 @@ function updateMatchUI() {
     ready,
     match.winner,
     mine.join(","),
-    buildTaken,
+    pick?.card ?? "",
+    buildBits,
     match.mode ?? "",
     JSON.stringify(match.teams ?? {}),
     match.king ?? 0,
@@ -1141,25 +1166,61 @@ function updateMatchUI() {
     const t = teams?.[String(pid)];
     return t === 0 ? "Team One" : t === 1 ? "Team Two" : null;
   };
+  const buildTitle = $("build-title"),
+    takenLine = $("build-taken");
   if (match.phase === "break") {
     $("round-banner").hidden = false;
     $("round-banner").textContent = `Round ${match.round - 1} — ${teamName(winnerId) ?? name ?? "Nobody"}`;
     const cardsEl = $("build-cards");
     cardsEl.innerHTML = "";
+    // One card per break: the first click locks every button — even a claim
+    // still on the wire — so a second pick cannot even be attempted.
+    const locked = mine.some((c) => owned(c)) || !!pick;
+    cardsEl.classList.toggle("locked", locked);
     for (const cardId of mine) {
       const card = CARDS.find((c) => c.id === cardId);
       if (!card) continue;
-      const taken = !!((local?.state.build ?? 0) & cardBit(cardId));
+      const chosen = owned(cardId) || pick?.card === cardId;
       const b = document.createElement("button");
-      b.className = "build-card" + (taken ? " taken" : "");
+      b.className = "build-card" + (chosen ? " taken" : "");
       const t = document.createElement("b");
       t.textContent = card.name;
       const p = document.createElement("p");
       p.textContent = card.blurb;
       b.append(t, p);
-      if (!taken) b.onclick = () => send({ type: "pick", card: cardId });
+      if (chosen) {
+        b.setAttribute("aria-disabled", "true");
+        const mark = document.createElement("span");
+        mark.className = "pick-mark";
+        mark.textContent = "✓ Locked in";
+        b.append(mark);
+      } else if (!locked)
+        b.onclick = () => {
+          pick = { card: cardId, sent: performance.now() };
+          send({ type: "pick", card: cardId });
+          if (local)
+            voice.spatial?.effect(
+              { x: local.state.x, y: local.state.y + 0.65, z: local.state.z },
+              "lock",
+            );
+        };
       cardsEl.append(b);
     }
+    buildTitle.textContent = !mine.length
+      ? "NO CARDS LEFT TO TAKE"
+      : locked
+        ? "CARD LOCKED IN"
+        : "CHOOSE AN UPGRADE";
+    takenLine.textContent = stack.length ? `Your build: ${stack.join(" · ")}` : "";
+    takenLine.hidden = !stack.length;
+    $("build").hidden = false;
+  } else if (match.phase === "countdown") {
+    // The board is gone before the countdown starts, so the build stays up
+    // through it: you can read what you actually took.
+    $("build-cards").innerHTML = "";
+    buildTitle.textContent = "YOUR BUILD";
+    takenLine.textContent = stack.length ? stack.join(" · ") : "No cards yet";
+    takenLine.hidden = false;
     $("build").hidden = false;
   } else {
     $("build").hidden = true;

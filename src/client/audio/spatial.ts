@@ -24,6 +24,8 @@ const EFFECTS: Record<string, EffectSpec> = {
   "step-soft": { volume: 0.04, duration: 0.095, from: 105, to: 42, noise: 0.9, cutoff: 650 },
   jump: { volume: 0.13, duration: 0.2, from: 210, to: 460, noise: 0.3, cutoff: 1800 },
   pickup: { volume: 0.16, duration: 0.18, from: 420, to: 680, noise: 0.3, cutoff: 650 },
+  // A card locked in during the build phase: a short rising chirp.
+  lock: { volume: 0.2, duration: 0.26, from: 520, to: 1040, noise: 0.1, cutoff: 2600, type: "triangle" },
   shoot: { volume: 0.3, duration: 0.17, from: 820, to: 70, noise: 1.1, cutoff: 3200, type: "triangle" },
   swing: { volume: 0.18, duration: 0.16, from: 340, to: 95, noise: 0.8, cutoff: 1400 },
   hit: { volume: 0.3, duration: 0.26, from: 220, to: 38, noise: 0.7, cutoff: 700 },

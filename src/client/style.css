@@ -857,13 +857,44 @@ body.turning * {
   line-height: 1.45;
   color: #eae4f2;
 }
-.build-card:hover {
+.build-card:not(.taken):hover {
   border-color: var(--green);
   background: #3a3160d9;
 }
+/* The pick answers itself: the card you took turns lime and gets stamped. */
 .build-card.taken {
-  opacity: 0.55;
+  border-color: var(--green);
+  background: #3a3160e6;
+  box-shadow: 0 0 16px #c9f24f45;
   cursor: default;
+  animation: card-lock 0.24s ease-out;
+}
+.build-card .pick-mark {
+  display: block;
+  margin-top: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  color: var(--green);
+}
+.build-cards.locked .build-card:not(.taken) {
+  opacity: 0.42;
+  cursor: default;
+}
+.build-taken {
+  margin-top: 12px;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: #fff;
+  text-shadow: 0 2px 10px #000c;
+}
+@keyframes card-lock {
+  from {
+    transform: scale(0.92);
+  }
+  to {
+    transform: scale(1);
+  }
 }
 #ready-button {
   margin-left: 6px;
