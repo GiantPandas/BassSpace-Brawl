@@ -197,30 +197,38 @@ an `AudioWorkletNode` on the receiving client's playback path.
 
 ### Match flow (JSON)
 
-The room runs a match machine: `lobby → countdown → round → break → … →
-match-end`. It starts when at least two connected members are all ready and
-re-arms the same way after a match ends. A `{type:"ready", active}` message
+The room runs a match machine:
+`lobby → build → countdown → round → break → … → match-end`. It starts when at
+least two connected members are all ready and re-arms the same way after a match
+ends. A `{type:"ready", active}` message
 toggles one member's flag; the host rebroadcasts the room state as
 `{type:"match", phase, round, rounds, until, ready, winner}` on join, on every
 ready toggle and on each transition. `until` is the server tick the current
 phase ends at (0 in lobby/match-end); clients derive displayed seconds from
-`until − latestTick`. At a countdown's start the authority respawns everyone to
+`until − latestTick`. `build` is the upgrade board dealt before round 1, so a
+match is fought with a build from the first round; `break` is the same board
+between rounds. At a countdown's start the authority respawns everyone to
 their spawn; a round ends early when one or fewer players remain, or on timeout,
 and the healthiest survivor wins (a tie goes to the lower ID). After the final
 round the match winner is whoever took the most rounds. Player slots and IDs
 persist across rounds; reconnecting restores the same player.
 
-During a break the authority deals each connected member `MATCH.cardsOffered`
-cards they do not already own and puts that deal on the wire as
-`offers: [{id, cards}]` on the same `match` broadcast. A `{type:"pick", card}`
-message claims one card from it; the authority validates the phase, the deal and
+The authority deals each connected member `MATCH.cardsOffered` cards they do not
+already own at the start of a `build` or a `break` and puts that deal on the
+wire as `offers: [{id, cards}]` on the same `match` broadcast; the field is
+present only while a board is open. A member joining mid-board is dealt their
+own cards alone — re-dealing everyone would take back the picks already made.
+A `{type:"pick", card}` message claims one card from it; the authority validates
+the phase, the deal and
 the bitmask, then answers `{type:"pick-result", accepted, card}` and
-rebroadcasts the match state. One card per break: once the member owns anything
+rebroadcasts the match state. One card per board: once the member owns anything
 from the current deal, further picks come back `accepted: false`. The build
 itself never needs its own message — it rides the tick as the `build` bitmask in
-the player record. The break ends when every connected member holds a card from
+the player record. The board ends when every connected member holds a card from
 the deal, or at `until`, when a random card is handed to whoever is still
-browsing.
+browsing; the King is then stacked with one extra card. During `build` anyone
+who leaves the arena is respawned rather than eliminated — the yard is still a
+playground before round 1.
 
 ### Game modes
 

@@ -327,15 +327,63 @@ test("a fall through the stage while the lobby waits is not an elimination", asy
   assert.equal(player.state.z, spawn[2]);
   assert.equal(player.state.out, 0, "still in, waiting for the ready gate");
 });
+/**
+ * Ready both members and get to the countdown. A match now opens on a card
+ * board, so each side takes a card from its own deal — the board closes as
+ * soon as both have picked and the countdown follows.
+ */
+async function startMatch(
+  a: Awaited<ReturnType<typeof member>>,
+  b: Awaited<ReturnType<typeof member>>,
+) {
+  const waiting = [a, b].map((m) => ({
+    deal: wait(
+      m.ws,
+      (x) => x.type === "match" && x.phase === "build" && !!x.offers,
+    ),
+    pick: wait(m.ws, (x) => x.type === "pick-result" && x.accepted),
+  }));
+  const countdown = wait(
+    a.ws,
+    (x) => x.type === "match" && x.phase === "countdown",
+  );
+  a.ws.send(JSON.stringify({ type: "ready", active: true }));
+  b.ws.send(JSON.stringify({ type: "ready", active: true }));
+  const deals = await Promise.all(waiting.map((w) => w.deal));
+  [a, b].forEach((m, i) => {
+    const mine = deals[i].offers.find((o: any) => o.id === m.welcome.id);
+    assert.ok(mine?.cards.length, "every side is dealt a board");
+    m.ws.send(JSON.stringify({ type: "pick", card: mine.cards[0] }));
+  });
+  const picks = await Promise.all(waiting.map((w) => w.pick));
+  return { match: await countdown, deals, picks };
+}
+test("the match deals a card board before round 1", async () => {
+  const a = await member(),
+    code = a.welcome.code,
+    b = await member(code);
+  const { match, deals, picks } = await startMatch(a, b);
+  assert.equal(match.phase, "countdown", "both picks opened the round");
+  assert.equal(deals[0].offers.length, 2, "the deal covers both members");
+  for (const d of deals)
+    for (const o of d.offers) assert.equal(o.cards.length, 3, "three cards each");
+  assert.deepEqual(
+    picks.map((p: any) => p.accepted),
+    [true, true],
+  );
+  const room = app.rooms.get(code)!;
+  for (const m of [a, b]) {
+    const build = room.members.get(m.welcome.id)!.build;
+    assert.ok(build, "the card is owned before the round starts");
+    assert.equal(room.sim.players.get(m.welcome.id)!.state.build, build);
+  }
+});
 test("teams modes split the lobby and share every victory", async () => {
   const a = await member(),
     code = a.welcome.code,
     b = await member(code);
   a.ws.send(JSON.stringify({ type: "mode", mode: "teams-3" }));
-  const start = wait(a.ws, (m) => m.type === "match" && m.phase === "countdown");
-  a.ws.send(JSON.stringify({ type: "ready", active: true }));
-  b.ws.send(JSON.stringify({ type: "ready", active: true }));
-  const m = await start;
+  const { match: m } = await startMatch(a, b);
   assert.deepEqual(m.teams, { [String(a.welcome.id)]: 0, [String(b.welcome.id)]: 1 });
   assert.equal(app.rooms.get(code)!.teams.get(a.welcome.id), 0);
 });
@@ -344,10 +392,7 @@ test("king of the yard crowns one of the lobby", async () => {
     code = a.welcome.code,
     b = await member(code);
   a.ws.send(JSON.stringify({ type: "mode", mode: "king" }));
-  const start = wait(a.ws, (m) => m.type === "match" && m.phase === "countdown");
-  a.ws.send(JSON.stringify({ type: "ready", active: true }));
-  b.ws.send(JSON.stringify({ type: "ready", active: true }));
-  const m = await start;
+  const { match: m } = await startMatch(a, b);
   assert.ok([a.welcome.id, b.welcome.id].includes(m.king), "the crown goes to a player");
   assert.equal(app.rooms.get(code)!.king, m.king);
 });
@@ -356,10 +401,7 @@ test("chaos mode rolls a modifier for the first round", async () => {
     code = a.welcome.code,
     b = await member(code);
   a.ws.send(JSON.stringify({ type: "mode", mode: "chaos" }));
-  const start = wait(a.ws, (m) => m.type === "match" && m.phase === "countdown");
-  a.ws.send(JSON.stringify({ type: "ready", active: true }));
-  b.ws.send(JSON.stringify({ type: "ready", active: true }));
-  const m = await start;
+  const { match: m } = await startMatch(a, b);
   assert.ok(m.modifier && m.modifier !== "none", "the modifier rides the broadcast");
   assert.equal(app.rooms.get(code)!.sim.env, m.modifier);
 });

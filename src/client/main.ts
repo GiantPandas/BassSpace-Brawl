@@ -127,7 +127,7 @@ function award(n: number, reason?: string) {
   if (reason) toast(`+${n} 💰 — ${reason}`);
 }
 let match: {
-  phase: "lobby" | "countdown" | "round" | "break" | "match-end";
+  phase: "lobby" | "build" | "countdown" | "round" | "break" | "match-end";
   round: number;
   rounds: number;
   until: number;
@@ -378,10 +378,15 @@ async function connect() {
       if (m.type === "speaking") voice.speakingFrom(m.id, m.active);
       if (m.type === "match") {
         match = m;
-        // Between rounds the mouse goes free: the build cards are DOM buttons
-        // and nothing is clickable while pointer lock holds its cursor. The
-        // countdown of the next round takes the lock back so aiming resumes.
-        if (m.phase === "break" || m.phase === "match-end") {
+        // While a card board is open — before round 1 or between rounds — the
+        // mouse goes free: the build cards are DOM buttons and nothing is
+        // clickable while pointer lock holds its cursor. The countdown of the
+        // next round takes the lock back so aiming resumes.
+        if (
+          m.phase === "break" ||
+          m.phase === "build" ||
+          m.phase === "match-end"
+        ) {
           if (document.pointerLockElement) document.exitPointerLock();
         } else if (m.phase === "countdown" && !document.pointerLockElement) {
           if (connected && !previewControls) void lock();
@@ -803,7 +808,11 @@ document.addEventListener("pointerlockchange", () => {
     previewControls = false;
     $("pause").hidden = true;
   } else if (!previewControls &&
-    !(match?.phase === "break" || match?.phase === "match-end")) {
+    !(
+      match?.phase === "break" ||
+      match?.phase === "build" ||
+      match?.phase === "match-end"
+    )) {
     keys.clear();
     voice.setTalk(false);
     $("pause").hidden = false;
@@ -1115,15 +1124,16 @@ function updateMatchUI() {
   }
   const seconds = Math.max(0, match.until - latestTick);
   const ready = match.ready.includes(id);
-  const mine =
-    match.phase === "break"
-      ? (match.offers?.find((o) => o.id === id)?.cards ?? [])
-      : [];
+  // The card board is open before round 1 (`build`) and between rounds (`break`).
+  const board = match.phase === "break" || match.phase === "build";
+  const mine = board
+    ? (match.offers?.find((o) => o.id === id)?.cards ?? [])
+    : [];
   const buildBits = local?.state.build ?? 0;
   const owned = (cardId: string) => !!(buildBits & cardBit(cardId));
   // An in-flight claim settles when the tick carries it, when a fresh deal
   // arrives, or when the authority's reply has had its chance and not come.
-  if (match.phase !== "break" || !mine.includes(pick?.card ?? "")) pick = null;
+  if (!board || !mine.includes(pick?.card ?? "")) pick = null;
   else if (pick && (owned(pick.card) || performance.now() - pick.sent > 900))
     pick = null;
   // Everything this player has stacked so far, in card order.
@@ -1168,9 +1178,11 @@ function updateMatchUI() {
   };
   const buildTitle = $("build-title"),
     takenLine = $("build-taken");
-  if (match.phase === "break") {
-    $("round-banner").hidden = false;
-    $("round-banner").textContent = `Round ${match.round - 1} — ${teamName(winnerId) ?? name ?? "Nobody"}`;
+  if (board) {
+    if (match.phase === "break") {
+      $("round-banner").hidden = false;
+      $("round-banner").textContent = `Round ${match.round - 1} — ${teamName(winnerId) ?? name ?? "Nobody"}`;
+    } else $("round-banner").hidden = true;
     const cardsEl = $("build-cards");
     cardsEl.innerHTML = "";
     // One card per break: the first click locks every button — even a claim
@@ -1210,7 +1222,9 @@ function updateMatchUI() {
       ? "NO CARDS LEFT TO TAKE"
       : locked
         ? "CARD LOCKED IN"
-        : "CHOOSE AN UPGRADE";
+        : match.phase === "build"
+          ? "CHOOSE YOUR FIRST UPGRADE"
+          : "CHOOSE AN UPGRADE";
     takenLine.textContent = stack.length ? `Your build: ${stack.join(" · ")}` : "";
     takenLine.hidden = !stack.length;
     $("build").hidden = false;
@@ -1239,13 +1253,13 @@ function updateMatchUI() {
   ) {
     $("round-banner").hidden = false;
     $("round-banner").textContent = `⚡ ${modifierName(match.modifier)}`;
-  } else if (match.phase !== "break") $("round-banner").hidden = true;
+  } else if (!board) $("round-banner").hidden = true;
   $("match-timer").textContent =
     match.phase === "round"
       ? `R${match.round}/${match.rounds} · ${Math.ceil(seconds / 60)}s`
       : match.phase === "countdown"
         ? "Get ready"
-        : match.phase === "break"
+        : board
           ? `BUILD · ${Math.ceil(seconds / 60)}s`
           : "";
 }

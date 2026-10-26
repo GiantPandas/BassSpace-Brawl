@@ -190,12 +190,12 @@ cut steering while grounded. The explosive grill booms authority-only every
 `GRILL.period` ticks: a radial shove + HP drain that clients learn about from a
 `grill` message and feel through the next snapshot's velocity/HP/stagger.
 
-**Match.** `createHost` runs the match machine (`lobby → countdown → round →
-break → … → match-end`): it starts when at least two connected members are all
+**Match.** `createHost` runs the match machine (`lobby → build → countdown →
+round → break → … → match-end`): it starts when at least two connected members are all
 ready, respawns everyone at a countdown's start, and ends a round early when one
 or fewer players remain. In free-for-all the healthiest survivor wins a round
 (tie → lower ID) and the most rounds wins the match; card offers are dealt in
-breaks. The whole state rides one JSON broadcast — `{type:"match", phase,
+`build` (before round 1) and in `break` (between rounds) — one card per board. The whole state rides one JSON broadcast — `{type:"match", phase,
 round, rounds, until, ready, winner, mode, …}` — sent on join, every ready
 toggle and each transition. Six modes (`ffa`, `teams-2/3/4`, `king`, `chaos`,
 defined in `src/shared/match.ts`) are picked in the lobby by a `{type:"mode",

@@ -699,3 +699,31 @@ test("teams modes split the lobby and wear their badges", async ({
   await expect(badges).toHaveCount(2);
   await expect(badges.first()).toHaveText("A");
 });
+test("the match opens on an upgrade board before round 1", async ({
+  page,
+  context,
+}) => {
+  const code = await create(page, "Scout");
+  const friend = await context.newPage();
+  await join(friend, code, "Moss");
+  await page.getByRole("button", { name: "Ready up" }).click();
+  await friend.getByRole("button", { name: "Ready up" }).click();
+  // The gate opens on a card board, not straight on the countdown.
+  await expect(page.locator("#build")).toBeVisible();
+  await expect(page.locator("#build-title")).toHaveText("CHOOSE YOUR FIRST UPGRADE");
+  await expect(page.locator(".build-card")).toHaveCount(3);
+  await expect(friend.locator(".build-card")).toHaveCount(3);
+  const card = page.locator(".build-card").first();
+  const name = (await card.locator("b").textContent())!;
+  await card.click();
+  await expect(card.locator(".pick-mark")).toHaveText("✓ Locked in");
+  await expect(page.locator("#build-title")).toHaveText("CARD LOCKED IN");
+  await expect(page.locator("#build-taken")).toHaveText(`Your build: ${name}`);
+  await expect(page.locator("#toast")).toHaveText(`Locked in: ${name}`);
+  // One card each closes the board; the build stays readable through the count.
+  await friend.locator(".build-card").first().click();
+  await expect(page.locator("#countdown")).toBeVisible();
+  await expect(page.locator("#build-title")).toHaveText("YOUR BUILD");
+  await expect(page.locator(".build-card")).toHaveCount(0);
+  await expect(page.locator("#build-taken")).toHaveText(name);
+});

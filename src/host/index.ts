@@ -52,7 +52,14 @@ type Member = {
   /** Date.now() of the last emote this member performed (rate limit). */
   lastEmote: number;
 };
-type MatchPhase = "lobby" | "countdown" | "round" | "break" | "match-end";
+/** `build` is the card board before round 1; `break` is the one between rounds. */
+type MatchPhase =
+  | "lobby"
+  | "build"
+  | "countdown"
+  | "round"
+  | "break"
+  | "match-end";
 /** The room's match flow. `until` is the tick the phase ends at, if any. */
 type Match = {
   phase: MatchPhase;
@@ -146,18 +153,18 @@ export async function createHost(options: { maxRooms?: number } = {}) {
       king: r.king || undefined,
       modifier: r.sim.env === "none" ? undefined : r.sim.env,
       offers:
-        r.match.phase === "break"
+        r.match.phase === "break" || r.match.phase === "build"
           ? [...r.members.values()]
               .filter((m) => m.ws)
               .map((m) => ({ id: m.id, cards: m.offer }))
           : undefined,
     };
   }
-  /** Deal each connected member three cards they don't already own. */
-  function dealOffers(r: Room) {
+  /** Deal three unowned cards — to everyone, or to one member who just joined. */
+  function dealOffers(r: Room, only?: Member) {
     const pool = [...IMPLEMENTED_CARDS];
     for (const m of r.members.values()) {
-      if (!m.ws) continue;
+      if (!m.ws || (only && m !== only)) continue;
       const owned = new Set(pool.filter((id) => m.build & cardBit(id)));
       const cards: string[] = [];
       while (
@@ -174,6 +181,13 @@ export async function createHost(options: { maxRooms?: number } = {}) {
   /** The env modifier active during this round; both sides derive it. */
   function envFor(r: Room) {
     return r.mode === "chaos" ? chaosModifierFor(r.code, r.match.round) : "none";
+  }
+  /** Deal cards and hold the arena open while everyone reads them. */
+  function startBuild(r: Room) {
+    r.match.phase = "build";
+    r.match.until = r.tick + MATCH.buildPhaseTicks;
+    dealOffers(r);
+    broadcast(r, matchInfo(r));
   }
   function startCountdown(r: Room) {
     r.sim.respawn();
@@ -470,7 +484,10 @@ export async function createHost(options: { maxRooms?: number } = {}) {
             };
             room.members.set(id, member);
             room.sim.addPlayer(id);
-            if (room.match.phase === "break") dealOffers(room);
+            // A joiner mid-board gets their own deal; nobody else's cards are
+            // re-shuffled, or their one pick would be taken back.
+            if (room.match.phase === "break" || room.match.phase === "build")
+              dealOffers(room, member);
             // A mid-match joiner in a team mode goes to the smaller side.
             if (teamSize(room.mode) && room.match.phase !== "lobby") {
               let a = 0, b = 0;
@@ -547,8 +564,9 @@ export async function createHost(options: { maxRooms?: number } = {}) {
           return;
         }
         if (msg.type === "pick") {
-          // One card per break (design doc §2): the board locks as soon as
-          // anything from this deal is taken, so a second click is refused.
+          // One card per board (design doc §2): it locks as soon as anything
+          // from this deal is taken, so a second click is refused — at match
+          // start and between rounds alike.
           // Every answer names the card back — the client marks the button the
           // moment it sends and needs to know which one to unmark. Echo the
           // normalised id only: refuse to bounce back whatever was sent.
@@ -556,7 +574,7 @@ export async function createHost(options: { maxRooms?: number } = {}) {
             build = member.build,
             locked = member.offer.some((id) => build & cardBit(id));
           if (
-            room.match.phase !== "break" ||
+            (room.match.phase !== "break" && room.match.phase !== "build") ||
             !IMPLEMENTED_CARDS.has(card) ||
             locked ||
             !member.offer.includes(card) ||
@@ -816,7 +834,9 @@ export async function createHost(options: { maxRooms?: number } = {}) {
                 : 0;
             room.match.round = 1;
             room.wins.clear();
-            startCountdown(room);
+            // Round 1 is fought with a build too: deal the first cards and let
+            // everyone choose before the countdown takes the arena.
+            startBuild(room);
           }
         } else if (room.match.phase === "countdown") {
           if (room.tick >= room.match.until) beginRound(room);
@@ -825,8 +845,16 @@ export async function createHost(options: { maxRooms?: number } = {}) {
             (c) => !c.state.out,
           ).length;
           if (alive <= 1 || room.tick >= room.match.until) endRound(room);
-        } else if (room.match.phase === "break") {
-          // The break ends when everyone has picked; the hard cap hands a
+        } else if (
+          room.match.phase === "break" ||
+          room.match.phase === "build"
+        ) {
+          // Before round 1 the arena is still lobby-adjacent: a fall into the
+          // void is a playground hazard, not an elimination you sit out.
+          if (room.match.phase === "build")
+            for (const c of room.sim.players.values())
+              if (c.state.out) room.sim.respawnPlayer(c.state.id);
+          // The board ends when everyone has picked; the hard cap hands a
           // random card to whoever is still browsing.
           const connected = [...room.members.values()].filter((m) => m.ws),
             picked = (m: Member) =>
