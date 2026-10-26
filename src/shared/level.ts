@@ -11,6 +11,11 @@ export type PropKind =
   | "crate"
   | "ball"
   | "gun"
+  | "smg"
+  | "shotgun"
+  | "rifle"
+  | "launcher"
+  | "seeker"
   | "bat"
   | "horn"
   | "chair"
@@ -85,6 +90,11 @@ export const PROPS: Prop[] = [
   { p: [10, 0.5, 1], kind: "crate" },
   { p: [-4, 0.5, -2], kind: "gun" },
   { p: [1, 0.5, -10], kind: "gun" },
+  { p: [2.5, 0.5, -2.5], kind: "smg" },
+  { p: [-2.5, 0.5, 2.5], kind: "shotgun" },
+  { p: [8, 0.5, 1.8], kind: "rifle" },
+  { p: [-9, 0.5, -1.6], kind: "launcher" },
+  { p: [0, 0.5, 8.5], kind: "seeker" },
   { p: [0, 0.5, -4], kind: "bat" },
   { p: [-3, 0.5, 4], kind: "horn" },
   { p: [-7.8, 0.5, 1.4], kind: "ball" },
@@ -193,6 +203,238 @@ export const WEAPON = {
   /** How much of your own steering survives while staggered. */
   control: 0.12,
 };
+/**
+ * Every gun is a prop kind, and this table is the whole difference between them:
+ * the same pellet physics with different numbers, plus two self-propelled
+ * behaviours (a shell that arcs and bursts, a swarm that hunts). Nothing about a
+ * gun travels on the wire — both sides read it from the arena layout by prop id.
+ */
+export type GunKind =
+  | "gun"
+  | "smg"
+  | "shotgun"
+  | "rifle"
+  | "launcher"
+  | "seeker";
+export type GunSpec = {
+  /** Shown on the pickup prompt and beside the ammo readout. */
+  name: string;
+  /** How far the aim ray reads; also how far a shot is drawn. */
+  range: number;
+  /** Ticks between trigger pulls at 60 Hz. */
+  cooldown: number;
+  /** Rounds per magazine. */
+  ammo: number;
+  /** Ticks to refill it; QUICK DRAW still shortens this. */
+  reload: number;
+  /** Muzzle speed of a pellet, metres per second. */
+  pelletSpeed: number;
+  /** Ticks a pellet stays live before it fizzles out. */
+  pelletsLive: number;
+  /** Pellets per trigger pull. TRIPLE SHOT adds two to the fan. */
+  pellets: number;
+  /** Total width of the fan in radians; a single pellet ignores it. */
+  spread: number;
+  /** The shove a pellet hands out, and how much HP it takes. */
+  knock: number;
+  lift: number;
+  /** Scales impact HP, so a swarm of small rounds does not read as one big one. */
+  damage: number;
+  /** Ticks of lost footing. */
+  stagger: number;
+  /** BOOM TUBE shells burst on contact; SEEKER rounds curve toward a target. */
+  explosive: boolean;
+  homing: boolean;
+  /** Gravity on the pellet: the launcher's shell loops, everything else flies flat. */
+  gravityScale: number;
+  /** Radial blast for an explosive pellet. */
+  boom: { radius: number; force: number; lift: number; damage: number };
+  /** Shove back on the shooter, and the pellet's collider radius. */
+  recoil: number;
+  radius: number;
+  /** Hand pose: forward reach, sideways offset, how far the grip sits down. */
+  hold: { forward: number; sideways: number; lowered: number };
+  /** Barrel tip, measured from the hand pose; the visual model matches it. */
+  muzzleZ: number;
+  /** Collider half-extents and mass, so a tube is heftier than a pistol. */
+  collider: { s: [number, number, number]; mass: number };
+  /** Firing sound. */
+  sound: "shoot" | "shoot-fast" | "shoot-heavy" | "launch";
+};
+export const GUNS: Record<GunKind, GunSpec> = {
+  /** The starter shove gun — the numbers above are its tuning. */
+  gun: {
+    name: "SHOVE GUN",
+    range: WEAPON.range,
+    cooldown: WEAPON.cooldown,
+    ammo: WEAPON.ammo,
+    reload: WEAPON.reload,
+    pelletSpeed: WEAPON.pelletSpeed,
+    pelletsLive: WEAPON.pelletsLive,
+    pellets: 1,
+    spread: WEAPON.tripleSpread * 2,
+    knock: WEAPON.knock,
+    lift: WEAPON.lift,
+    damage: 1,
+    stagger: WEAPON.stagger,
+    explosive: false,
+    homing: false,
+    gravityScale: 0,
+    boom: {
+      radius: WEAPON.boomRadius,
+      force: WEAPON.boomForce,
+      lift: WEAPON.boomLift,
+      damage: WEAPON.boomDamage,
+    },
+    recoil: WEAPON.recoil,
+    radius: 0.1,
+    hold: { forward: 0.82, sideways: 0.27, lowered: 0.19 },
+    muzzleZ: 0.64,
+    collider: { s: [0.1, 0.11, 0.3], mass: 1.1 },
+    sound: "shoot",
+  },
+  /** BUZZ GUN: a cheap drum of light rounds. Fast, weak, no reach. */
+  smg: {
+    name: "BUZZ GUN",
+    range: 14,
+    cooldown: 7,
+    ammo: 26,
+    reload: 130,
+    pelletSpeed: 26,
+    pelletsLive: 90,
+    pellets: 1,
+    spread: 0.12,
+    knock: 6.5,
+    lift: 2.4,
+    damage: 0.5,
+    stagger: 14,
+    explosive: false,
+    homing: false,
+    gravityScale: 0,
+    boom: { radius: 3, force: 6, lift: 2.5, damage: 14 },
+    recoil: 0.7,
+    radius: 0.08,
+    hold: { forward: 0.86, sideways: 0.24, lowered: 0.17 },
+    muzzleZ: 0.6,
+    collider: { s: [0.1, 0.12, 0.34], mass: 1.25 },
+    sound: "shoot-fast",
+  },
+  /** FAN GUN: seven rounds in a wide sheet. Terrible past ten metres. */
+  shotgun: {
+    name: "FAN GUN",
+    range: 11,
+    cooldown: 44,
+    ammo: 4,
+    reload: 140,
+    pelletSpeed: 22,
+    pelletsLive: 45,
+    pellets: 7,
+    spread: 0.44,
+    knock: 10.5,
+    lift: 4.5,
+    damage: 0.45,
+    stagger: 30,
+    explosive: false,
+    homing: false,
+    gravityScale: 0,
+    boom: { radius: 3, force: 6, lift: 2.5, damage: 14 },
+    recoil: 3.2,
+    radius: 0.075,
+    hold: { forward: 0.84, sideways: 0.3, lowered: 0.2 },
+    muzzleZ: 0.7,
+    collider: { s: [0.11, 0.13, 0.38], mass: 1.5 },
+    sound: "shoot-heavy",
+  },
+  /** LONG SHOT: slow to rack, but the round crosses the whole arena. */
+  rifle: {
+    name: "LONG SHOT",
+    range: 34,
+    cooldown: 40,
+    ammo: 5,
+    reload: 150,
+    pelletSpeed: 46,
+    pelletsLive: 220,
+    pellets: 1,
+    spread: 0.06,
+    knock: 12,
+    lift: 5.5,
+    damage: 1.5,
+    stagger: 34,
+    explosive: false,
+    homing: false,
+    gravityScale: 0,
+    boom: { radius: 3, force: 6, lift: 2.5, damage: 14 },
+    recoil: 3,
+    radius: 0.09,
+    hold: { forward: 0.95, sideways: 0.26, lowered: 0.18 },
+    muzzleZ: 0.92,
+    collider: { s: [0.09, 0.12, 0.46], mass: 1.6 },
+    sound: "shoot-heavy",
+  },
+  /** BOOM TUBE: a shell that loops under gravity and bursts on anything. */
+  launcher: {
+    name: "BOOM TUBE",
+    range: 22,
+    cooldown: 95,
+    ammo: 2,
+    reload: 180,
+    pelletSpeed: 17,
+    pelletsLive: 240,
+    pellets: 1,
+    spread: 0,
+    knock: 0,
+    lift: 0,
+    damage: 0,
+    stagger: 28,
+    explosive: true,
+    homing: false,
+    gravityScale: 0.5,
+    boom: { radius: 5, force: 11, lift: 5.5, damage: 26 },
+    recoil: 2.6,
+    radius: 0.14,
+    hold: { forward: 0.9, sideways: 0.32, lowered: 0.24 },
+    muzzleZ: 0.78,
+    collider: { s: [0.14, 0.16, 0.42], mass: 1.9 },
+    sound: "launch",
+  },
+  /** SEEKER: three lazy rounds that bend toward whoever is nearest. */
+  seeker: {
+    name: "SEEKER",
+    range: 20,
+    cooldown: 52,
+    ammo: 3,
+    reload: 160,
+    pelletSpeed: 14,
+    pelletsLive: 300,
+    pellets: 3,
+    spread: 0.6,
+    knock: 8,
+    lift: 4,
+    damage: 0.8,
+    stagger: 22,
+    explosive: false,
+    homing: true,
+    gravityScale: 0,
+    boom: { radius: 3, force: 6, lift: 2.5, damage: 14 },
+    recoil: 1.4,
+    radius: 0.12,
+    hold: { forward: 0.84, sideways: 0.28, lowered: 0.2 },
+    muzzleZ: 0.66,
+    collider: { s: [0.12, 0.13, 0.33], mass: 1.35 },
+    sound: "shoot",
+  },
+};
+/** Narrow a prop kind to a gun kind; junk and tools come back false. */
+export function isGun(kind: PropKind | undefined): kind is GunKind {
+  return kind !== undefined && kind in GUNS;
+}
+/** Rounds the held gun holds, for an empty trigger with no gun in hand. */
+export const magazineOf = (kind: PropKind | undefined) =>
+  isGun(kind) ? GUNS[kind].ammo : WEAPON.ammo;
+/** How long a gun's reload takes in ticks under a build's reload scale
+ *  (QUICK DRAW hands in 0.6 of the pistol's), scaled to each magazine. */
+export const gunReloadTicks = (gun: GunSpec, reloadTicks: number) =>
+  Math.max(1, Math.round((gun.reload * reloadTicks) / WEAPON.reload));
 /** Short-range, authority-owned shove from a baseball bat. */
 export const MELEE = {
   range: 2.35,

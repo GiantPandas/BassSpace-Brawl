@@ -123,17 +123,28 @@ range.
 `swing`, `honk`, `door` and `reload`, deduplicated by `request`. The reply is
 `{type:"action-result", request, action, accepted}`.
 
-`shoot` requires a held gun with `ammo > 0` and a server-owned cooldown of
-`WEAPON.cooldown` ticks; it decrements `ammo` and spawns a live pellet — a small
-dynamic Rapier body that flies straight from the muzzle at `WEAPON.pelletSpeed`
-(gravity off) and dies on first contact, after `WEAPON.pelletsLive` ticks, or if
-it leaves the arena. The impact is decided by the authority: striking a player
-adds knockback, lift and stagger, and drains health in proportion to the
-pellet's pre-bounce speed (capped at `COMBAT.maxPerHit`). A player is eliminated
+`shoot` requires a held gun with `ammo > 0` and a server-owned cooldown of that
+gun's `cooldown` ticks. `GUNS` in `level.ts` is the whole arsenal — magazine,
+reload, range, pellet speed and lifetime, pellets per shot and spread, knock,
+lift, damage scale, stagger, recoil, blast, gravity arc, radius and sound per
+kind — and which gun is in hand is derived from `object`, never sent: kinds are
+static and both sides read the same arena. An accepted shot decrements `ammo` and
+spawns one live pellet per line — a small dynamic Rapier body that flies from the
+muzzle at the gun's speed (gravity off unless the gun arcs, as the launcher does)
+and dies on first contact, after the gun's lifetime in ticks, or if it leaves the
+arena. The impact is decided by the authority: striking a player adds the gun's
+knockback, lift and stagger, and drains health in proportion to the pellet's
+pre-bounce speed, scaled by the gun and capped at `COMBAT.maxPerHit`. An armed
+pellet — the launcher's shells, or any round under the EXPLOSIVE card — bursts on
+contact instead of transferring a hit, and the blast is announced once as
+`{type:"explosion", x, y, z}`. A player is eliminated
 when health reaches zero or it leaves the arena, leaving it inert until the next
 respawn. Every accepted shot is broadcast as `{type:"shot", id, object, x, y, z,
 dx, dy, dz, distance, hit, pellet}` — the muzzle origin and direction the clients
-draw the tracer from, with `pellet` the live prop's new ID. A shooter draws its
+draw the tracer from, with `pellet` the live prop's new ID and `dirs` the fan's
+directions whenever the gun fires more than one round. Cards override the gun
+without touching the wire: TRIPLE SHOT adds two pellets to any fan, HOMING curves
+any round, and picking a gun up loads its own magazine. A shooter draws its
 own tracer on the trigger press and ignores the echo of its own shot.
 
 `swing` requires a held bat and uses an authority-owned swept sphere over the

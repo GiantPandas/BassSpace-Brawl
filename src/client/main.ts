@@ -12,7 +12,19 @@ import {
   PELLET_ID_BASE,
   type Character,
 } from "../shared/simulation";
-import { STEP, PALETTE, CHARACTER_PALETTE, WEAPON, MELEE, HORN } from "../shared/level";
+import {
+  GUNS,
+  HORN,
+  MELEE,
+  PALETTE,
+  CHARACTER_PALETTE,
+  STEP,
+  WEAPON,
+  gunReloadTicks,
+  isGun,
+  magazineOf,
+  type PropKind,
+} from "../shared/level";
 import { DEFAULT_ARENA, buildArena } from "../shared/arena";
 import { CARDS, cardBit, buildStats } from "../shared/upgrades";
 import {
@@ -52,6 +64,10 @@ const scene = new GameScene($("world"));
 let arena = DEFAULT_ARENA;
 /** Prop kind by id for the current arena — ids are positions in `arena.props`. */
 const kindOf = (id: number) => arena.props[id - 1]?.kind;
+/** What to call a prop in the HUD: guns read as the model on the tin. */
+const propLabel = (kind: PropKind | undefined) => (isGun(kind) ? GUNS[kind].name : kind);
+/** Anything the mouse button uses: any gun, the bat, the horn. */
+const isTool = (kind: PropKind | undefined) => isGun(kind) || kind === "bat" || kind === "horn";
 let sim: Simulation | undefined,
   local: Character | undefined,
   socket: Channel | undefined,
@@ -435,8 +451,11 @@ async function connect() {
         if (m.kind === "honk" && m.object) scene.useProp(m.object, "horn");
       }
       if (m.type === "shot") {
-        // The pellet itself rides the snapshot; a shove gun draws no tracer.
-        if (m.id !== id) voice.spatial?.effect(m, "shoot");
+        // The pellets themselves ride the snapshot; a shove gun draws no tracer.
+        if (m.id !== id) {
+          const gun = kindOf(m.object);
+          voice.spatial?.effect(m, isGun(gun) ? GUNS[gun].sound : "shoot");
+        }
         if (m.hit) {
           const struck =
             m.hit === id
@@ -673,30 +692,32 @@ function fire() {
   if (!local || !sim) return;
   const held = local.state.held,
     kind = kindOf(held);
-  if (kind !== "gun" && kind !== "bat" && kind !== "horn") return;
+  if (!isGun(kind) && kind !== "bat" && kind !== "horn") return;
   const now = performance.now();
   const cooldown =
-    (kind === "gun" ? WEAPON.cooldown : kind === "bat" ? MELEE.cooldown : HORN.cooldown) *
+    (isGun(kind) ? GUNS[kind].cooldown : kind === "bat" ? MELEE.cooldown : HORN.cooldown) *
     STEP * 1000;
   if (now - lastUse < cooldown) return;
   lastUse = now;
   send({
     type: "action",
     request: ++action,
-    action: kind === "gun" ? "shoot" : kind === "bat" ? "swing" : "honk",
+    action: isGun(kind) ? "shoot" : kind === "bat" ? "swing" : "honk",
   });
-  if (kind !== "gun") {
+  if (!isGun(kind)) {
     scene.useProp(held, kind);
     return;
   }
   const s = local.state,
+    g = GUNS[kind],
     muzzle = scene.muzzle(held) ?? sim.muzzle(s);
-  // The shove gun shows only the live pellet, which rides the snapshots;
-  // scene.tracer is kept in the effects kit for a future laser weapon.
+  // Pellets ride the snapshots, so the client paints only the muzzle's own beat:
+  // one ghost for the shot plus the report this gun makes. The fan, the arc and
+  // the blast are the authority's. scene.tracer is kept for a future laser gun.
   if (local.state.ammo > 0 && performance.now() >= reloadUntil) {
     local.state.ammo--;
     scene.pelletGhost(muzzle);
-    voice.spatial?.effect(muzzle, "shoot");
+    voice.spatial?.effect(muzzle, g.sound);
   } else {
     // Empty or mid-reload: a metallic click instead of the report.
     voice.spatial?.effect(muzzle, "clack");
@@ -873,8 +894,15 @@ addEventListener("keydown", (e) => {
   if (!e.repeat && e.code === "KeyF") fire();
   if (!e.repeat && e.code === "KeyR") {
     send({ type: "action", request: ++action, action: "reload" });
+    const gun = local ? kindOf(local.state.held) : undefined;
     reloadUntil =
-      performance.now() + buildStats(local?.state.build ?? 0).reloadTicks * STEP * 1000;
+      performance.now() +
+      gunReloadTicks(
+        isGun(gun) ? GUNS[gun] : GUNS.gun,
+        buildStats(local?.state.build ?? 0).reloadTicks,
+      ) *
+        STEP *
+        1000;
   }
   // Emotes ride Digit1..4, bound to whatever is equipped in the locker.
   if (!e.repeat && e.code.startsWith("Digit")) {
@@ -1312,10 +1340,15 @@ function frame(now: number) {
       jz = (Math.random() - 0.5) * shake * 0.22;
     const s = local.state,
       eye = sim.eye(s);
-    const gunHeld = kindOf(s.held) === "gun";
-    $("ammo").hidden = !gunHeld;
-    if (gunHeld)
-      $("ammo").textContent = s.ammo > 0 ? String(s.ammo) : "RELOADING";
+    // Which gun, and how many rounds its own magazine still holds: every gun
+    // carries a different count, so the HUD names it rather than assuming six.
+    const heldKind = kindOf(s.held);
+    $("ammo").hidden = !isGun(heldKind);
+    if (isGun(heldKind))
+      $("ammo").textContent =
+        s.ammo > 0
+          ? `${GUNS[heldKind].name} · ${s.ammo}/${magazineOf(heldKind)}`
+          : "RELOADING";
     // The bubble is on the avatar — invisible from the default first-person
     // seat — so the HUD carries the state: full green bar while it is up,
     // amber progress while the cooldown behind it recharges.
@@ -1427,22 +1460,15 @@ function frame(now: number) {
     const door = s.held || target ? 0 : sim.doorTarget(s);
     scene.setHighlight(target);
     $("crosshair").classList.toggle("target", !!target || !!door);
-    $("crosshair").classList.toggle(
-      "armed",
-      ["gun", "bat", "horn"].includes(kindOf(s.held) ?? ""),
-    );
+    $("crosshair").classList.toggle("armed", isTool(kindOf(s.held)));
     $("interact").hidden =
       (!target && !door && !s.held) ||
       (!document.pointerLockElement && !previewControls);
     $("interact").innerHTML = s.held
       ? `<kbd class="key">E</kbd> Drop <span style="margin-left:10px"><kbd class="key">Q</kbd> Throw</span>${
-          ["gun", "bat", "horn"].includes(kindOf(s.held) ?? "")
+          isTool(kindOf(s.held))
             ? `<span style="margin-left:10px"><kbd class="key">Click</kbd> ${
-                kindOf(s.held) === "gun"
-                  ? "Fire"
-                  : kindOf(s.held) === "bat"
-                    ? "Swing"
-                    : "Honk"
+                isGun(kindOf(s.held)) ? "Fire" : kindOf(s.held) === "bat" ? "Swing" : "Honk"
               }</span>`
             : ""
         }`
@@ -1450,7 +1476,7 @@ function frame(now: number) {
         ? arena.doors.find((d) => d.id === door)?.auto
           ? "Opens by itself"
           : `<kbd class="key">E</kbd> ${arena.doors.find((d) => d.id === door)!.zone}`
-        : `<kbd class="key">E</kbd> Pick up the ${kindOf(target) ?? "thing"}`;
+        : `<kbd class="key">E</kbd> Pick up the ${propLabel(kindOf(target)) ?? "thing"}`;
     const [zoneName, zoneDesc] = zone(s);
     $("zone-name").textContent = zoneName;
     $("zone-desc").textContent = zoneDesc;

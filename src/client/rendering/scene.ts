@@ -1,7 +1,15 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
-import { CHARACTER_PALETTE, PALETTE, type Box, type PropKind, type Vec3 } from "../../shared/level";
+import {
+  CHARACTER_PALETTE,
+  GUNS,
+  PALETTE,
+  isGun,
+  type Box,
+  type PropKind,
+  type Vec3,
+} from "../../shared/level";
 import { DEFAULT_ARENA, type ArenaLayout } from "../../shared/arena";
 import { PELLET_ID_BASE, type DoorState, type WindowState } from "../../shared/simulation";
 import { cardBit } from "../../shared/upgrades";
@@ -554,70 +562,123 @@ export class GameScene {
       root.add(valve);
       return root;
     }
-    if (kind === "gun") {
-      // Modelled pointing down -z, which is where its holder is looking.
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(0.11, 0.16, 0.56),
-        new THREE.MeshStandardMaterial({
-          color: "#414b54",
-          roughness: 0.45,
-          metalness: 0.45,
-        }),
-      );
-      body.castShadow = true;
-      root.add(body);
-      const barrel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.045, 0.05, 0.42, 10),
-        new THREE.MeshStandardMaterial({
-          color: "#2b3238",
-          roughness: 0.35,
-          metalness: 0.6,
-        }),
-      );
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0, 0.02, -0.42);
-      barrel.castShadow = true;
-      const grip = new THREE.Mesh(
-        new THREE.BoxGeometry(0.1, 0.28, 0.13),
-        new THREE.MeshStandardMaterial({ color: "#6b5137", roughness: 0.8 }),
-      );
-      grip.position.set(0, -0.2, 0.14);
-      grip.rotation.x = -0.22;
-      grip.castShadow = true;
-      const sight = new THREE.Mesh(
-        new THREE.BoxGeometry(0.05, 0.05, 0.2),
-        new THREE.MeshStandardMaterial({
-          color: PALETTE[i % 8],
-          roughness: 0.6,
-        }),
-      );
-      sight.position.set(0, 0.11, -0.02);
-      root.add(barrel, grip, sight);
-      const brake = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.055, 0.055, 0.06, 10),
-        new THREE.MeshStandardMaterial({ color: "#2b3238", roughness: 0.35, metalness: 0.6 }),
-      );
-      brake.rotation.x = Math.PI / 2;
-      brake.position.set(0, 0.02, -0.62);
-      brake.castShadow = true;
-      const pump = new THREE.Mesh(
-        new THREE.BoxGeometry(0.09, 0.05, 0.18),
-        new THREE.MeshStandardMaterial({ color: "#6b5137", roughness: 0.8 }),
-      );
-      pump.position.set(0, -0.09, -0.3);
-      pump.castShadow = true;
-      const mag = new THREE.Mesh(
-        new THREE.BoxGeometry(0.07, 0.12, 0.09),
-        new THREE.MeshStandardMaterial({ color: "#3b2b22", roughness: 0.8 }),
-      );
-      mag.position.set(0, -0.16, 0.0);
-      mag.castShadow = true;
-      const notch = new THREE.Mesh(
-        new THREE.BoxGeometry(0.055, 0.035, 0.03),
-        new THREE.MeshStandardMaterial({ color: PALETTE[i % 8], roughness: 0.6 }),
-      );
-      notch.position.set(0, 0.11, 0.24);
-      root.add(brake, pump, mag, notch);
+    if (isGun(kind)) {
+      // Modelled pointing down -z, which is where its holder is looking. The
+      // receiver is children[0] — the body `setHighlight` tints — and every gun
+      // has its own silhouette, so you can read what someone is carrying from
+      // across the room. The tip lands at GUNS[kind].muzzleZ, the point the
+      // physics fires from and the client draws a tracer from.
+      const metal = (color: string, metalness = 0.5, roughness = 0.4) =>
+          new THREE.MeshStandardMaterial({ color, roughness, metalness }),
+        dark = metal("#2b3238", 0.6, 0.35),
+        frame = metal("#414b54", 0.45, 0.45),
+        wood = metal("#6b5137", 0.05, 0.8),
+        leather = metal("#3b2b22", 0.05, 0.8),
+        tint = metal(PALETTE[i % 8], 0.1, 0.6);
+      const brick = (
+        w: number,
+        h: number,
+        d: number,
+        mat: THREE.Material,
+        x: number,
+        y: number,
+        z: number,
+        tilt = 0,
+      ) => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+        mesh.position.set(x, y, z);
+        mesh.rotation.x = tilt;
+        mesh.castShadow = true;
+        root.add(mesh);
+        return mesh;
+      };
+      const tube = (
+        r1: number,
+        r2: number,
+        len: number,
+        mat: THREE.Material,
+        x: number,
+        y: number,
+        z: number,
+      ) => {
+        const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r1, r2, len, 12), mat);
+        mesh.rotation.x = Math.PI / 2;
+        mesh.position.set(x, y, z);
+        mesh.castShadow = true;
+        root.add(mesh);
+        return mesh;
+      };
+      switch (kind) {
+        case "gun": {
+          brick(0.11, 0.16, 0.56, frame, 0, 0, 0);
+          tube(0.045, 0.05, 0.42, dark, 0, 0.02, -0.42);
+          brick(0.1, 0.28, 0.13, wood, 0, -0.2, 0.14, -0.22);
+          brick(0.05, 0.05, 0.2, tint, 0, 0.11, -0.02);
+          tube(0.055, 0.055, 0.06, dark, 0, 0.02, -0.62);
+          brick(0.09, 0.05, 0.18, wood, 0, -0.09, -0.3);
+          brick(0.07, 0.12, 0.09, leather, 0, -0.16, 0);
+          brick(0.055, 0.035, 0.03, tint, 0, 0.11, 0.24);
+          break;
+        }
+        case "smg": {
+          brick(0.1, 0.19, 0.5, frame, 0, 0, -0.06);
+          tube(0.038, 0.042, 0.26, dark, 0, 0.02, -0.47);
+          brick(0.05, 0.045, 0.2, tint, 0, 0.12, -0.14);
+          brick(0.09, 0.25, 0.12, wood, 0, -0.19, 0.14, -0.16);
+          brick(0.07, 0.24, 0.1, leather, 0, -0.2, -0.08);
+          brick(0.06, 0.06, 0.14, dark, 0, -0.04, 0.28);
+          break;
+        }
+        case "shotgun": {
+          brick(0.12, 0.18, 0.5, frame, 0, 0, -0.02);
+          tube(0.055, 0.06, 0.5, dark, 0, 0.045, -0.47);
+          tube(0.05, 0.05, 0.46, dark, 0, -0.045, -0.45);
+          tube(0.066, 0.066, 0.05, tint, 0, 0, -0.7);
+          brick(0.09, 0.07, 0.2, wood, 0, -0.1, -0.32);
+          brick(0.1, 0.26, 0.13, wood, 0, -0.19, 0.16, -0.2);
+          brick(0.11, 0.16, 0.32, wood, 0, -0.03, 0.34);
+          break;
+        }
+        case "rifle": {
+          brick(0.09, 0.15, 0.72, frame, 0, 0, -0.18);
+          tube(0.032, 0.036, 0.44, dark, 0, 0.02, -0.7);
+          tube(0.05, 0.05, 0.28, dark, 0, 0.13, -0.02);
+          brick(0.07, 0.05, 0.13, tint, 0, 0.13, 0.14);
+          brick(0.08, 0.24, 0.11, leather, 0, -0.19, 0.04, -0.1);
+          brick(0.1, 0.24, 0.34, wood, 0, -0.1, 0.4, -0.1);
+          brick(0.06, 0.14, 0.14, dark, 0, -0.1, -0.5);
+          break;
+        }
+        case "launcher": {
+          brick(0.14, 0.2, 0.36, frame, 0, 0, 0.14);
+          tube(0.11, 0.13, 0.64, dark, 0, 0.02, -0.34);
+          tube(0.14, 0.12, 0.07, tint, 0, 0.02, -0.7);
+          brick(0.11, 0.26, 0.13, wood, 0, -0.2, 0.18, -0.2);
+          brick(0.1, 0.15, 0.22, dark, 0.11, -0.04, 0.06);
+          tube(0.045, 0.045, 0.18, tint, 0.18, -0.04, 0.06);
+          break;
+        }
+        case "seeker": {
+          brick(0.12, 0.18, 0.42, frame, 0, 0, 0.04);
+          for (const x of [-0.07, 0, 0.07]) {
+            tube(0.036, 0.04, 0.36, dark, x, 0.03, -0.36);
+            const eye = new THREE.Mesh(
+              new THREE.SphereGeometry(0.045, 12, 10),
+              new THREE.MeshStandardMaterial({
+                color: PALETTE[i % 8],
+                roughness: 0.4,
+                emissive: new THREE.Color(PALETTE[i % 8]),
+                emissiveIntensity: 0.6,
+              }),
+            );
+            eye.position.set(x, 0.03, -0.58);
+            root.add(eye);
+          }
+          brick(0.1, 0.26, 0.12, wood, 0, -0.19, 0.18, -0.2);
+          brick(0.07, 0.16, 0.09, leather, 0, -0.16, -0.04);
+          break;
+        }
+      }
       return root;
     }
     if (kind === "bat") {
@@ -1099,10 +1160,11 @@ export class GameScene {
   }
   /** Exact rendered barrel tip, after interpolation, for a tracer with no side gap. */
   muzzle(id: number): Vec3 | undefined {
-    const gun = this.props.get(id);
-    if (!gun || this.arena.props[id - 1]?.kind !== "gun") return;
+    const gun = this.props.get(id),
+      kind = this.arena.props[id - 1]?.kind;
+    if (!gun || !isGun(kind)) return;
     gun.updateMatrixWorld(true);
-    const p = gun.localToWorld(new THREE.Vector3(0, 0.02, -0.64));
+    const p = gun.localToWorld(new THREE.Vector3(0, 0.02, -GUNS[kind].muzzleZ));
     return { x: p.x, y: p.y, z: p.z };
   }
   useProp(id: number, kind: PropKind) {

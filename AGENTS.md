@@ -40,8 +40,9 @@ src/
   shared/                     Runs on BOTH client and server. No DOM, no three, no Node APIs.
     level.ts                  LEVEL boxes (render + collision), DOORS (sliding leaves),
                               WINDOWS (breakable panes) + WINDOW break speed,
-                              SPAWNS, PROPS (crate/ball/gun/bat/horn/chair/table/
-                              trashcan/bottle/bucket) + propKind, PALETTE,
+                              SPAWNS, PROPS (six guns/bat/horn/ball/crate/chair/
+                              table/trashcan/bottle/bucket) + propKind + GUNS
+                              (per-gun tuning), PALETTE,
                               STEP = 1/60, MAX_PLAYERS = 8, WEAPON tuning,
                               DOOR_TRAVEL/AUTO_RANGE, TRAMPOLINE bounce,
                               pool/trampoline geometry, VOICE distance model
@@ -155,25 +156,33 @@ a client request id (deduplicated server-side). `pickup` succeeds only if
 direction — hits exactly that object and nobody owns it. Aim matters: floor
 props need pitch downward.
 
-**Props have kinds.** `PROPS` in `level.ts` pairs each start position with
-`crate`, `ball`, `gun`, `bat` or `horn`, plus the junk — `chair`, `table`,
-`trashcan`, `bottle` and `bucket`; the id is still the index + 1. The kind picks the
+**Props have kinds.** `PROPS` in `level.ts` pairs each start position with a
+gun (`gun`, `smg`, `shotgun`, `rifle`, `launcher`, `seeker`), a `bat`, a `horn`,
+a `ball` or the junk — `crate`, `chair`, `table`, `trashcan`, `bottle` and
+`bucket`; the id is still the index + 1. The kind picks the
 collider (a ball is a bouncy sphere with `CoefficientCombineRule.Max`), the mesh,
 and how it is carried. Kinds are static and never travel on the wire.
 
-**Shooting.** A gun fires with left click or `F`, on a `WEAPON.cooldown` tick
-timer the server owns. An accepted shot decrements ammo (auto-reload starts at
-zero, `R` starts it early) and spawns a live pellet — a small dynamic Rapier
-body that flies straight from the muzzle at `WEAPON.pelletSpeed`, gravity off,
-and dies on first contact, after `WEAPON.pelletsLive` ticks, or leaving the
-arena. Impact is decided by the authority: a hit adds `WEAPON.knock`/
-`WEAPON.lift` to the victim's velocity plus `WEAPON.stagger` ticks of lost
+**Shooting.** A gun fires with left click or `F`, on a tick timer the server
+owns. `GUNS` in `level.ts` is the whole arsenal: one entry per gun kind with its
+range, cooldown, magazine, reload, pellet speed and lifetime, pellets per shot
+and spread, knock, lift, damage scale, stagger, recoil, blast, radius, hold pose,
+muzzle offset, collider and sound. An accepted shot decrements the held gun's
+magazine (auto-reload starts at zero, `R` starts it early) and spawns one live
+pellet per line — a small dynamic Rapier body that flies from the muzzle at the
+gun's speed, gravity off unless the gun arcs (the launcher), and dies on first
+contact, after the gun's lifetime in ticks, or leaving the arena. Impact is
+decided by the authority: a hit adds the gun's
+knock/lift to the victim's velocity plus its `stagger` ticks of lost
 footing (a networked `PlayerState` field so the client's replay agrees), and
-drains health proportional to the pellet's pre-bounce speed, capped at
+drains health proportional to the pellet's pre-bounce speed, scaled by the gun
+and capped at
 `COMBAT.maxPerHit`. A player is eliminated — zero HP or out of bounds — and
 goes inert until the next respawn (see `BassSPace Brawl Design Doc.txt`). The
 accepted shot is broadcast for tracers and sound; the shooter draws its own
-tracer immediately and ignores the echo.
+tracer immediately and ignores the echo. Cards override the gun, never the wire:
+TRIPLE SHOT adds two pellets to any fan, EXPLOSIVE arms any pellet, HOMING
+curves any round, and a pickup loads the gun's own magazine.
 
 **Doors.** `DOORS` in `level.ts` lists sliding leaves that live in the physics
 world as kinematic bodies. Hand-worked leaves toggle with `E` when the crosshair
@@ -299,10 +308,10 @@ you are in.
 | You want to… | Touch | Notes |
 | --- | --- | --- |
 | Change the room's geometry | `src/shared/level.ts` `LEVEL` | Boxes are both mesh and collider. Metres, Y up. Decorative extras live in `GameScene` constructor. |
-| Move spawns / props | `SPAWNS`, `PROPS` in `level.ts` | Eight spawns; prop ids are index + 1. Give a prop a kind: `crate`, `ball` or `gun`. |
+| Move spawns / props | `SPAWNS`, `PROPS` in `level.ts` | Eight spawns; prop ids are index + 1. Give a prop a kind: a gun kind (`gun`, `smg`, `shotgun`, `rifle`, `launcher`, `seeker`), `ball`, `crate`, `bat`, `horn` or junk. Props must rest on solid ground — an unsupported prop falls into the void and makes noise. |
 | Add a prop kind | `PROPS`/`PropKind` in `level.ts`, `shape()` in `simulation.ts`, `makeProp()` in `scene.ts` | Keep children[0] of the mesh group the tintable body — `setHighlight` writes its emissive. |
 | Add or move a door | `DOORS` in `level.ts` | Leaves slide from `p` to `p + slide`; mount them in front of the wall they cover. `auto` makes them open on approach. |
-| Tune the guns | `WEAPON` in `level.ts` | Range, cooldown, ammo, reload, shove, lift, recoil, stagger length and how much steering a staggered player keeps. |
+| Tune the guns | `GUNS`/`WEAPON` in `level.ts` | Per kind: range, cooldown, magazine, reload, speed, pellets + spread, knock, lift, damage scale, stagger, recoil, blast, hold pose, muzzle offset, collider, sound. `WEAPON` keeps the pistol's numbers and the shared globals (spread, homing steer). |
 | Tune pool / sprinkler / grill hazards | `POOL`, `SLIP`, `GRILL` in `level.ts`; `motor()`/`step()` in `simulation.ts` | Pool entry and launch run in the deterministic motor on both sides; the slip patches cut steering while grounded; the grill booms authority-only. |
 | Tune movement | `Simulation.motor()` | Runs identically on both sides. Gravity is set in the Rapier world **and** the motor's vertical acceleration — change both. |
 | Add or tune an upgrade card | `src/shared/upgrades.ts` (`CARDS`, `buildStats`, `IMPLEMENTED_CARDS`), effects in `simulation.ts` `motor()`/`swing()`/`shoot()`, offers in `host/index.ts` `dealOffers()` | One bit per card in `PlayerState.build`; only ids in `IMPLEMENTED_CARDS` may be dealt. Card order is the wire format — don't reorder or remove entries. |

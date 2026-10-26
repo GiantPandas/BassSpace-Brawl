@@ -3,6 +3,7 @@ import {
   AUTO_RANGE,
   DOOR_SLAM,
   DOOR_TRAVEL,
+  GUNS,
   HORN,
   IMPACT,
   MELEE,
@@ -10,13 +11,18 @@ import {
   TINY_ARENA,
   WEAPON,
   WINDOW,
+  gunReloadTicks,
+  isGun,
+  magazineOf,
   type Door,
+  type GunKind,
+  type GunSpec,
   type PropKind,
   type WindowDef,
 } from "./level.js";
 import { DEFAULT_ARENA } from "./arena.js";
 import { CHAOS, COMBAT } from "./match.js";
-import { buildStats } from "./upgrades.js";
+import { buildStats, type BuildStats } from "./upgrades.js";
 import {
   BUTTON,
   type Input,
@@ -89,12 +95,23 @@ export type Pellet = {
   bounces: number;
   /** Launch speed, kept so HOMING can re-energise a slowing pellet. */
   speed: number;
+  /** Which gun fired it: its shove, HP scale and stagger ride the hit. */
+  gun: GunKind;
+  /** BOOM TUBE shells burst on contact, with the card's blast as an override. */
+  explosive: boolean;
+  /** SEEKER rounds curve even without the HOMING card. */
+  homing: boolean;
 };
 export type Swing = { id: number; object: number; hit: number };
 /** Per-kind default restitutions; chaos "bounce" overrides them all. */
 const PROP_BOUNCE: Record<PropKind, number> = {
   ball: 0.86,
   gun: 0.1,
+  smg: 0.1,
+  shotgun: 0.1,
+  rifle: 0.1,
+  launcher: 0.1,
+  seeker: 0.1,
   bat: 0.2,
   horn: 0.14,
   chair: 0.2,
@@ -112,11 +129,14 @@ function shape(kind: PropKind) {
       .setFriction(0.45)
       .setRestitution(0.86)
       .setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Max);
-  if (kind === "gun")
-    return RAPIER.ColliderDesc.cuboid(0.1, 0.11, 0.3)
-      .setMass(1.1)
+  if (isGun(kind)) {
+    // Every gun is a hard metal box; only its heft and length differ.
+    const [hx, hy, hz] = GUNS[kind].collider.s;
+    return RAPIER.ColliderDesc.cuboid(hx, hy, hz)
+      .setMass(GUNS[kind].collider.mass)
       .setFriction(0.7)
       .setRestitution(0.1);
+  }
   if (kind === "bat")
     return RAPIER.ColliderDesc.cuboid(0.09, 0.09, 0.55)
       .setMass(0.95)
@@ -586,9 +606,10 @@ export class Simulation {
       d = this.direction(s),
       span = Math.max(0.001, Math.hypot(d.x, d.z)),
       right = { x: -d.z / span, z: d.x / span },
-      forward = kind === "gun" ? 0.82 : kind === "bat" ? 0.76 : 0.72,
-      sideways = kind === "gun" ? 0.27 : kind === "bat" ? 0.34 : 0.29,
-      lowered = kind === "gun" ? 0.19 : kind === "bat" ? 0.27 : 0.16;
+      gun = isGun(kind) ? GUNS[kind] : null,
+      forward = gun ? gun.hold.forward : kind === "bat" ? 0.76 : 0.72,
+      sideways = gun ? gun.hold.sideways : kind === "bat" ? 0.34 : 0.29,
+      lowered = gun ? gun.hold.lowered : kind === "bat" ? 0.27 : 0.16;
     const cy = Math.cos(s.yaw / 2),
       sy = Math.sin(s.yaw / 2),
       cx = Math.cos(s.pitch / 2),
@@ -604,12 +625,14 @@ export class Simulation {
   }
   /** World-space tip of the gun barrel, matching its visual model. */
   muzzle(s: PlayerState) {
-    const pose = this.heldPose(s, "gun"),
+    const kind = this.kind(s.held),
+      gun = isGun(kind) ? GUNS[kind] : GUNS.gun,
+      pose = this.heldPose(s, kind),
       d = this.direction(s);
     return {
-      x: pose.position.x + d.x * 0.64,
-      y: pose.position.y + d.y * 0.64,
-      z: pose.position.z + d.z * 0.64,
+      x: pose.position.x + d.x * gun.muzzleZ,
+      y: pose.position.y + d.y * gun.muzzleZ,
+      z: pose.position.z + d.z * gun.muzzleZ,
     };
   }
   /** Closest collider along the look ray, players included. Nothing is mutated. */
@@ -713,50 +736,57 @@ export class Simulation {
     for (const s of states) if (s.broken) this.setWindow(s.id, true);
   }
   /**
-   * Fire the held gun. The pellet is a live body: it flies straight from the
-   * muzzle and does its damage on contact, so aim leads your target.
+   * Fire the held gun. The pellet is a live body: it flies from the muzzle and
+   * does its damage on contact, so aim leads your target. Which gun is in hand
+   * picks every number below — `GUNS` in level.ts is the whole arsenal.
    */
   shoot(playerId: number): Shot | null {
     const c = this.players.get(playerId);
-    if (!c || this.kind(c.state.held) !== "gun") return null;
+    if (!c) return null;
+    const kind = this.kind(c.state.held);
+    if (!isGun(kind)) return null;
+    const g = GUNS[kind];
     if (this.frame < (this.cooldowns.get(playerId) ?? 0)) return null;
     if ((this.reloadAt.get(playerId) ?? -1) > this.frame) return null;
     const s = c.state,
       muzzle = this.muzzle(s),
       d = this.direction(s),
-      st = buildStats(s.build);
+      st = buildStats(s.build),
+      reload = this.reloadTicks(g, st);
     if (s.ammo <= 0) {
       // Dry trigger: start the reload and let the client watch it finish.
-      this.reloadAt.set(playerId, this.frame + st.reloadTicks);
+      this.reloadAt.set(playerId, this.frame + reload);
       return null;
     }
-    this.cooldowns.set(playerId, this.frame + WEAPON.cooldown);
+    this.cooldowns.set(playerId, this.frame + g.cooldown);
     s.ammo--;
-    if (s.ammo === 0)
-      this.reloadAt.set(playerId, this.frame + st.reloadTicks);
+    if (s.ammo === 0) this.reloadAt.set(playerId, this.frame + reload);
     const speed =
-      WEAPON.pelletSpeed *
+      g.pelletSpeed *
       st.pelletSpeedMult *
       (this.env === "huge-pellets" ? CHAOS.pelletSpeedMult : 1);
-    const dirs = st.tripleShot ? this.spreadDirs(d) : [d];
+    const dirs = this.fanDirs(d, g.pellets + (st.tripleShot ? 2 : 0), g.spread);
     // Survivors ride high restitution so they actually rebound off things.
     const survives =
       st.bouncy || st.ricochet || st.rubberBullet || this.env === "bounce";
     const bounces = st.rubberBullet ? 2 : 0;
+    const explosive = g.explosive || st.explosive;
     const radius =
-      (st.bigBall ? 0.3 : 0.1) * (this.env === "huge-pellets" ? CHAOS.pelletRadiusMult : 1);
+      (st.bigBall ? 0.3 : g.radius) *
+      (this.env === "huge-pellets" ? CHAOS.pelletRadiusMult : 1);
+    const middle = Math.floor((dirs.length - 1) / 2);
     let firstId = 0,
       centerId = 0;
     dirs.forEach((dir, i) => {
       if (this.nextPelletId > 64000) this.clearPellets();
       const id = this.nextPelletId++;
       if (!firstId) firstId = id;
-      if (i === 1) centerId = id;
+      if (i === middle && dirs.length > 1) centerId = id;
       const body = this.world.createRigidBody(
         RAPIER.RigidBodyDesc.dynamic()
           .setTranslation(muzzle.x, muzzle.y, muzzle.z)
           .setLinearDamping(0.02)
-          .setGravityScale(0)
+          .setGravityScale(g.gravityScale)
           .setCcdEnabled(true),
       );
       let desc = RAPIER.ColliderDesc.ball(radius)
@@ -772,16 +802,19 @@ export class Simulation {
       this.pellets.set(id, {
         body,
         creator: playerId,
-        expires: this.frame + WEAPON.pelletsLive,
+        expires: this.frame + g.pelletsLive,
         v: { x: dir.x * speed, y: dir.y * speed, z: dir.z * speed },
         bounces,
         speed,
+        gun: kind,
+        explosive,
+        homing: st.homing || g.homing,
       });
       body.setLinvel({ x: dir.x * speed, y: dir.y * speed, z: dir.z * speed }, true);
     });
-    s.vx -= d.x * WEAPON.recoil;
-    s.vz -= d.z * WEAPON.recoil;
-    const hit = this.look(s, WEAPON.range, false);
+    s.vx -= d.x * g.recoil;
+    s.vz -= d.z * g.recoil;
+    const hit = this.look(s, g.range, false);
     return {
       id: playerId,
       object: s.held,
@@ -791,35 +824,50 @@ export class Simulation {
       dx: d.x,
       dy: d.y,
       dz: d.z,
-      distance: hit ? hit.timeOfImpact : WEAPON.range,
+      distance: hit ? hit.timeOfImpact : g.range,
       hit: 0,
       pellet: centerId || firstId,
-      dirs: st.tripleShot
+      dirs: dirs.length > 1
         ? dirs.map((x) => ({ dx: x.x, dy: x.y, dz: x.z }))
         : undefined,
     };
   }
-  /** The TRIPLE SHOT fan, in [left, center, right] order about the aim. */
-  spreadDirs(d: { x: number; y: number; z: number }): { x: number; y: number; z: number }[] {
-    const a = WEAPON.tripleSpread,
-      cos = Math.cos(a),
-      sin = Math.sin(a);
-    const rot = (g: number) => ({
-      x: d.x * cos + d.z * g * sin,
-      y: d.y,
-      z: -d.x * g * sin + d.z * cos,
-    });
-    return [rot(-1), { ...d }, rot(1)];
+  /** QUICK DRAW scales the pistol's discount, so it fits every magazine. */
+  private reloadTicks(g: GunSpec, st: BuildStats) {
+    return gunReloadTicks(g, st.reloadTicks);
+  }
+  /** A multi-round gun, fanned evenly about the aim in the yaw plane. */
+  private fanDirs(
+    d: { x: number; y: number; z: number },
+    count: number,
+    total: number,
+  ): { x: number; y: number; z: number }[] {
+    if (count <= 1) return [{ ...d }];
+    const step = total / (count - 1),
+      out: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i < count; i++) {
+      const a = (i - (count - 1) / 2) * step,
+        cos = Math.cos(a),
+        sin = Math.sin(a);
+      out.push({
+        x: d.x * cos + d.z * sin,
+        y: d.y,
+        z: -d.x * sin + d.z * cos,
+      });
+    }
+    return out;
   }
   /** Start refilling the held gun early; friendlier than waiting for empty. */
   reload(playerId: number) {
     const c = this.players.get(playerId);
-    if (!c || this.kind(c.state.held) !== "gun") return false;
+    if (!c) return false;
+    const kind = this.kind(c.state.held);
+    if (!isGun(kind)) return false;
     if ((this.reloadAt.get(playerId) ?? -1) > this.frame) return false;
-    if (c.state.ammo >= WEAPON.ammo) return false;
+    if (c.state.ammo >= GUNS[kind].ammo) return false;
     this.reloadAt.set(
       playerId,
-      this.frame + buildStats(c.state.build).reloadTicks,
+      this.frame + this.reloadTicks(GUNS[kind], buildStats(c.state.build)),
     );
     return true;
   }
@@ -898,6 +946,12 @@ export class Simulation {
           ? RAPIER.CoefficientCombineRule.Max
           : RAPIER.CoefficientCombineRule.Min,
       );
+    }
+    // Every gun hands you its own magazine, and a reload already running is
+    // about a gun you no longer have.
+    if (isGun(kind)) {
+      c.state.ammo = magazineOf(kind);
+      this.reloadAt.delete(playerId);
     }
     return true;
   }
@@ -990,7 +1044,9 @@ export class Simulation {
     for (const [id, until] of this.reloadAt)
       if (this.frame >= until) {
         const c = this.players.get(id);
-        if (c) c.state.ammo = WEAPON.ammo;
+        // Refill whatever is actually in hand — a gun picked up mid-reload
+        // would otherwise come back with the pistol's six rounds.
+        if (c) c.state.ammo = magazineOf(this.kind(c.state.held));
         this.reloadAt.delete(id);
       }
     this.moveDoors();
@@ -999,8 +1055,8 @@ export class Simulation {
       // Compact tools stay locked to one stable hand pose. Bulky throwable
       // props still pull back when a wall would clip them.
       const kind = this.kind(c.state.held),
-        tool = kind === "gun" || kind === "bat" || kind === "horn",
-        gun = kind === "gun",
+        gun = isGun(kind),
+        tool = gun || kind === "bat" || kind === "horn",
         reach = gun ? 1.5 : 2.25,
         lowered = gun ? 0.18 : 0,
         sideways = gun ? 0.28 : 0;
@@ -1090,7 +1146,7 @@ export class Simulation {
       if (this.env === "explosions" && this.frame % CHAOS.explosion.period === 0) {
         const x = this.arena.bounds.minX + Math.random() * (this.arena.bounds.maxX - this.arena.bounds.minX),
           z = this.arena.bounds.minZ + Math.random() * (this.arena.bounds.maxZ - this.arena.bounds.minZ);
-        this.explosionEvents.push({ x, y: 0.5, z });
+        // boomAt announces it; this used to push the event here as well.
         this.boomAt(
           { x, y: 0.5, z },
           CHAOS.explosion.radius,
@@ -1158,13 +1214,17 @@ export class Simulation {
     }
     return e.preV ?? { x: 0, y: 0, z: 0 };
   }
-  /** Impact damage above the harmless threshold; zero HP is an elimination. */
-  private hurt(s: PlayerState, rel: number) {
+  /**
+   * Impact damage above the harmless threshold; zero HP is an elimination.
+   * `scale` is the weapon's HP factor — a fan of small rounds hurts less per
+   * pellet than a single rifle slug of the same speed.
+   */
+  private hurt(s: PlayerState, rel: number, scale = 1) {
     const excess = rel - COMBAT.threshold;
     if (excess <= 0) return;
     s.hp = Math.max(
       0,
-      s.hp - Math.min(COMBAT.maxPerHit, excess * COMBAT.damagePerUnit),
+      s.hp - Math.min(COMBAT.maxPerHit, excess * COMBAT.damagePerUnit) * scale,
     );
     if (!s.hp) s.out = 1;
   }
@@ -1178,10 +1238,14 @@ export class Simulation {
   private knockScale(hp: number) {
     return 1 + ((COMBAT.hpMax - Math.max(0, hp)) / COMBAT.hpMax) * COMBAT.knockRamp;
   }
-  private boom(t: { x: number; y: number; z: number }) {
-    this.boomAt(t, WEAPON.boomRadius, WEAPON.boomForce, WEAPON.boomLift, WEAPON.boomDamage);
+  /** A blast from an armed pellet: the gun's numbers, or the card's. */
+  private boom(t: { x: number; y: number; z: number }, spec = GUNS.gun.boom) {
+    this.boomAt(t, spec.radius, spec.force, spec.lift, spec.damage);
   }
-  /** A radial blast with explicit numbers; chaos explosions pass their own. */
+  /**
+   * A radial blast with explicit numbers; chaos explosions and the BOOM TUBE
+   * pass their own. Every blast is announced once, so clients boom once.
+   */
   private boomAt(
     t: { x: number; y: number; z: number },
     radius: number,
@@ -1189,6 +1253,7 @@ export class Simulation {
     lift: number,
     damage: number,
   ) {
+    this.explosionEvents.push({ x: t.x, y: t.y, z: t.z });
     for (const c of this.players.values()) {
       const ps = c.state;
       if (ps.out) continue;
@@ -1239,11 +1304,11 @@ export class Simulation {
     }
     return best;
   }
-  /** HOMING: each tick, curve live pellets toward the nearest other player. */
+  /** HOMING (and the SEEKER's own rounds): curve live pellets toward a target. */
   private steerPellets() {
     for (const p of this.pellets.values()) {
-      const creator = this.players.get(p.creator)?.state;
-      if (!creator || !buildStats(creator.build).homing) continue;
+      // Decided at fire time, so a card taken after the shot does not retroact.
+      if (!p.homing) continue;
       const t = p.body.translation();
       const target = this.nearestPlayer(t, p.creator);
       if (!target) continue;
@@ -1384,11 +1449,13 @@ export class Simulation {
           live = this.pellets.get(pellet.id);
         if (!live) return;
         const creator = this.players.get(live.creator)?.state,
-          cstats = creator ? buildStats(creator.build) : undefined;
+          cstats = creator ? buildStats(creator.build) : undefined,
+          g = GUNS[live.gun];
         let deflect = false;
-        if (cstats?.explosive) {
-          // A bomb: radial impulse + HP on first contact, then it is gone.
-          this.boom(live.body.translation());
+        if (live.explosive) {
+          // A bomb: radial impulse + HP on first contact, then it is gone. The
+          // EXPLOSIVE card arms any gun; a BOOM TUBE arrives already armed.
+          this.boom(live.body.translation(), g.boom);
           spent.push(pellet.id);
           return;
         }
@@ -1423,11 +1490,11 @@ export class Simulation {
               const speed = Math.max(0.001, Math.hypot(live.v.x, live.v.y, live.v.z)),
                 mult = cstats?.knockMult ?? 1,
                 hurt = mult * this.knockScale(s.hp);
-              s.vx += (live.v.x / speed) * WEAPON.knock * hurt;
-              s.vz += (live.v.z / speed) * WEAPON.knock * hurt;
-              s.vy = Math.max(s.vy, 0) + WEAPON.lift * hurt;
-              s.stagger = WEAPON.stagger;
-              this.hurt(s, impact);
+              s.vx += (live.v.x / speed) * g.knock * hurt;
+              s.vz += (live.v.z / speed) * g.knock * hurt;
+              s.vy = Math.max(s.vy, 0) + g.lift * hurt;
+              s.stagger = g.stagger;
+              this.hurt(s, impact, g.damage);
               if (cstats?.chainReaction) {
                 // The victim's momentum bleeds into whoever is standing close.
                 for (const p of this.players.values()) {
@@ -1435,10 +1502,10 @@ export class Simulation {
                   if (ps.id === other.id || ps.out) continue;
                   if (Math.hypot(ps.x - s.x, ps.z - s.z) > 2.2) continue;
                   ps.vx +=
-                    (live.v.x / speed) * WEAPON.knock * mult * 0.4 * this.knockScale(ps.hp);
+                    (live.v.x / speed) * g.knock * mult * 0.4 * this.knockScale(ps.hp);
                   ps.vz +=
-                    (live.v.z / speed) * WEAPON.knock * mult * 0.4 * this.knockScale(ps.hp);
-                  ps.stagger = WEAPON.stagger;
+                    (live.v.z / speed) * g.knock * mult * 0.4 * this.knockScale(ps.hp);
+                  ps.stagger = g.stagger;
                 }
               }
             }

@@ -11,7 +11,7 @@ import {
   changedProp,
 } from "../src/shared/protocol.js";
 import { PELLET_ID_BASE, initPhysics, Simulation } from "../src/shared/simulation.js";
-import { HORN, MELEE, PADS, PROPS, STEP, WEAPON } from "../src/shared/level.js";
+import { HORN, MELEE, PADS, PROPS, STEP, WEAPON, GUNS, type GunKind } from "../src/shared/level.js";
 import { cardBit } from "../src/shared/upgrades.js";
 import {
   DEFAULT_COSMETICS,
@@ -719,6 +719,106 @@ test("big ball swells the pellet to three times the radius", () => {
   };
   assert.ok(Math.abs(radiusOf(0) - 0.1) < 1e-6, "a plain pellet is small");
   assert.ok(Math.abs(radiusOf(cardBit("big-ball")) - 0.3) < 1e-6, "the card triples it");
+});
+test("each gun runs its own magazine on its own cadence", () => {
+  const run = (kind: GunKind, ticks: number) => {
+    const sim = new Simulation(),
+      shooter = sim.addPlayer(1);
+    const id = PROPS.findIndex((p) => p.kind === kind) + 1;
+    sim.owners.set(id, 1);
+    shooter.state.held = id;
+    shooter.state.ammo = GUNS[kind].ammo;
+    sim.restore(shooter, { ...shooter.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
+    let shots = 0;
+    for (let i = 0; i < ticks; i++) {
+      if (sim.shoot(1)) shots++;
+      sim.step();
+    }
+    const r = { shots, ammo: shooter.state.ammo };
+    sim.dispose();
+    return r;
+  };
+  const pistol = run("gun", 180),
+    smg = run("smg", 180);
+  assert.equal(pistol.shots, WEAPON.ammo, "the pistol still spends exactly six");
+  assert.equal(smg.shots, GUNS.smg.ammo, "the buzz gun empties its whole magazine");
+  assert.ok(smg.shots > pistol.shots * 3, "and outfires it several times over");
+  assert.equal(smg.ammo, 0, "the last round left the magazine");
+});
+test("the fan gun throws seven pellets and spends one round", () => {
+  const sim = new Simulation(),
+    shooter = sim.addPlayer(1);
+  const id = PROPS.findIndex((p) => p.kind === "shotgun") + 1;
+  sim.owners.set(id, 1);
+  shooter.state.held = id;
+  shooter.state.ammo = GUNS.shotgun.ammo;
+  sim.restore(shooter, { ...shooter.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
+  const shot = sim.shoot(1);
+  assert.ok(shot, "the shot is accepted");
+  assert.equal(sim.pellets.size, GUNS.shotgun.pellets, "seven pellets are live");
+  assert.equal(shooter.state.ammo, GUNS.shotgun.ammo - 1, "one round, not seven");
+  const fan = shot.dirs ?? [];
+  assert.equal(fan.length, GUNS.shotgun.pellets, "every line rides the broadcast");
+  assert.equal(new Set(fan.map((d) => d.dx)).size, 7, "no two pellets fly the same line");
+  assert.ok(
+    Math.min(...fan.map((d) => d.dx)) < 0 && Math.max(...fan.map((d) => d.dx)) > 0,
+    "the fan opens both ways",
+  );
+  assert.ok(Math.abs(shot.dx) < 1e-9, "the middle pellet keeps the aim");
+  sim.dispose();
+});
+test("the boom tube's shell bursts on contact and says so once", () => {
+  const sim = new Simulation(),
+    shooter = sim.addPlayer(1),
+    victim = sim.addPlayer(2);
+  const id = PROPS.findIndex((p) => p.kind === "launcher") + 1;
+  sim.owners.set(id, 1);
+  shooter.state.held = id;
+  shooter.state.ammo = GUNS.launcher.ammo;
+  sim.restore(shooter, { ...shooter.state, x: 0, y: 0.87, z: 3, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
+  sim.restore(victim, { ...victim.state, x: 0, y: 0.87, z: -3, vx: 0, vy: 0, vz: 0, stagger: 0, out: 0 });
+  const shot = sim.shoot(1);
+  assert.ok(shot, "the shell leaves the tube");
+  assert.equal([...sim.pellets.values()][0].explosive, true, "the shell is armed");
+  sim.step();
+  for (let i = 0; i < 150 && victim.state.stagger === 0; i++) sim.step();
+  assert.ok(victim.state.stagger > 0, "the blast caught the victim");
+  assert.ok(victim.state.hp < COMBAT.hpMax, "and drained HP");
+  assert.equal(shooter.state.hp, COMBAT.hpMax, "six metres off, the shooter is clean");
+  assert.equal(sim.explosionEvents.length, 1, "clients hear exactly one boom");
+  sim.dispose();
+});
+test("the seeker's own rounds curve onto an off-axis player", () => {
+  const sim = new Simulation(),
+    shooter = sim.addPlayer(1),
+    victim = sim.addPlayer(2);
+  const id = PROPS.findIndex((p) => p.kind === "seeker") + 1;
+  sim.owners.set(id, 1);
+  shooter.state.held = id;
+  shooter.state.ammo = GUNS.seeker.ammo;
+  sim.restore(shooter, { ...shooter.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
+  sim.restore(victim, { ...victim.state, x: 2, y: 0.87, z: -6, vx: 0, vy: 0, vz: 0, stagger: 0, out: 0 });
+  const shot = sim.shoot(1);
+  assert.ok(shot, "the shot is accepted");
+  assert.equal(shot.dirs?.length, GUNS.seeker.pellets, "three barrels, three rounds");
+  assert.equal([...sim.pellets.values()][0].homing, true, "armed without the HOMING card");
+  sim.step();
+  for (let i = 0; i < 300 && victim.state.stagger === 0; i++) sim.step();
+  assert.ok(victim.state.stagger > 0, "a round curved onto them");
+  assert.ok(victim.state.hp < COMBAT.hpMax, "and the fan stung them");
+  sim.dispose();
+});
+test("picking up a gun loads its own magazine", () => {
+  const sim = new Simulation(),
+    shooter = sim.addPlayer(1);
+  sim.restore(shooter, { ...shooter.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
+  assert.equal(shooter.state.ammo, WEAPON.ammo, "you start with the pistol's six");
+  hold(sim, 1, "smg");
+  assert.equal(shooter.state.ammo, GUNS.smg.ammo, "the buzz gun comes loaded");
+  assert.equal(sim.release(1), true, "hands it back");
+  hold(sim, 1, "launcher");
+  assert.equal(shooter.state.ammo, GUNS.launcher.ammo, "the boom tube carries two");
+  sim.dispose();
 });
 test("a bounce pad launches you toward its perch", () => {
   const sim = new Simulation(),

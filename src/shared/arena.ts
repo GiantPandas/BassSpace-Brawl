@@ -365,6 +365,11 @@ export const buildArena = (seed: string): ArenaLayout => {
   const load: Prop["kind"][] = [
     "gun",
     "gun",
+    "smg",
+    "shotgun",
+    "rifle",
+    "launcher",
+    "seeker",
     "bat",
     "bat",
     "horn",
@@ -420,6 +425,11 @@ export const buildArena = (seed: string): ArenaLayout => {
   // Guarantee the fighting load-out survives even if every random spot clashed.
   const fallback: Array<[kind: Prop["kind"], x: number, z: number]> = [
     ["gun", -0.6, -0.6],
+    ["smg", 0.25, -0.75],
+    ["shotgun", -0.25, 0.75],
+    ["rifle", 0.75, -0.25],
+    ["launcher", -0.75, 0.25],
+    ["seeker", 0, -0.9],
     ["bat", 0.6, -0.6],
     ["horn", -0.6, 0.6],
     ["ball", 0.6, 0.6],
