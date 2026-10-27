@@ -15,7 +15,7 @@ import {
 import {
   GUNS,
   HORN,
-  MELEE,
+  FIST,
   PALETTE,
   CHARACTER_PALETTE,
   STEP,
@@ -69,8 +69,8 @@ const kindOf = (id: number) =>
   arena.props[id - 1]?.kind ?? scene.dropKinds.get(id);
 /** What to call a prop in the HUD: guns read as the model on the tin. */
 const propLabel = (kind: PropKind | undefined) => (isGun(kind) ? GUNS[kind].name : kind);
-/** Anything the mouse button uses: any gun, the bat, the horn. */
-const isTool = (kind: PropKind | undefined) => isGun(kind) || kind === "bat" || kind === "horn";
+/** What the mouse button fires rather than swings: any gun, the horn. */
+const isTool = (kind: PropKind | undefined) => isGun(kind) || kind === "horn";
 let sim: Simulation | undefined,
   local: Character | undefined,
   socket: Channel | undefined,
@@ -164,7 +164,7 @@ let match: {
 // (design doc §2), so the whole board locks on the first click.
 let pick: { card: string; sent: number } | null = null;
 const keys = new Set<string>(),
-  ballHeights = new Map<number, { y: number; dy: number }>(),
+  propHeights = new Map<number, { y: number; dy: number }>(),
   outStates = new Map<number, { out: number; hp: number }>(),
   pending: Input[] = [],
   outgoing: Input[] = [],
@@ -335,6 +335,7 @@ async function connect() {
         $<HTMLButtonElement>("create").disabled = false;
         if (import.meta.env.DEV)
           (window as any).__friendslop = {
+            GUNS,
             get state() {
               return local?.state;
             },
@@ -477,7 +478,7 @@ async function connect() {
         }
       }
       if (m.type === "swing") {
-        scene.useProp(m.object, "bat");
+        scene.punch(m.id, m.object);
         const swinger =
           m.id === id
             ? local?.state
@@ -638,14 +639,15 @@ function snapshot(s: Snapshot) {
     props = base.map((p) => changes.get(p.id) ?? p);
     for (const p of s.props) if (!base.some((q) => q.id === p.id)) props.push(p);
   }
-  // Balls announce themselves: a reversal in the authoritative height is a bounce.
+  // Loose props announce themselves: a reversal in the authoritative height is
+  // a bounce, which is worth hearing now that throws fly faster.
   for (const p of props) {
-    if (kindOf(p.id) !== "ball") continue;
-    const previous = ballHeights.get(p.id),
+    if (p.id >= PELLET_ID_BASE) continue;
+    const previous = propHeights.get(p.id),
       dy = previous ? p.y - previous.y : 0;
     if (previous && !p.owner && previous.dy < -0.05 && dy > 0.015)
       voice.spatial?.effect(p, "bounce");
-    ballHeights.set(p.id, { y: p.y, dy });
+    propHeights.set(p.id, { y: p.y, dy });
   }
   // Eliminations get a comedic reaction (design doc §17): a falling whistle
   // for whoever left the arena, a womp-womp for everyone else, plus a poof.
@@ -710,25 +712,25 @@ function interact(throwing = false) {
     object: sim.target(s),
   });
 }
-/** Use the held tool immediately; the authority still decides hits and cooldowns. */
+/** Use whatever is in the hand; the authority still decides hits and cooldowns. */
 function fire() {
   if (!local || !sim) return;
   const held = local.state.held,
-    kind = kindOf(held);
-  if (!isGun(kind) && kind !== "bat" && kind !== "horn") return;
+    kind = kindOf(held),
+    gun = isGun(kind),
+    horn = kind === "horn",
+    // A gun shoots, a horn honks, and anything else — including an empty hand —
+    // is swung as a punch.
+    verb = gun ? "shoot" : horn ? "honk" : "swing";
   const now = performance.now();
   const cooldown =
-    (isGun(kind) ? GUNS[kind].cooldown : kind === "bat" ? MELEE.cooldown : HORN.cooldown) *
-    STEP * 1000;
+    (gun ? GUNS[kind].cooldown : horn ? HORN.cooldown : FIST.cooldown) * STEP * 1000;
   if (now - lastUse < cooldown) return;
   lastUse = now;
-  send({
-    type: "action",
-    request: ++action,
-    action: isGun(kind) ? "shoot" : kind === "bat" ? "swing" : "honk",
-  });
-  if (!isGun(kind)) {
-    scene.useProp(held, kind);
+  send({ type: "action", request: ++action, action: verb });
+  if (!gun) {
+    if (horn) scene.useProp(held, "horn");
+    else scene.punch(id, held);
     return;
   }
   const s = local.state,
@@ -1494,22 +1496,20 @@ function frame(now: number) {
     scene.setHighlight(target);
     $("crosshair").classList.toggle("target", !!target || !!door);
     $("crosshair").classList.toggle("armed", isTool(kindOf(s.held)));
-    $("interact").hidden =
-      (!target && !door && !s.held) ||
-      (!document.pointerLockElement && !previewControls);
+    const handKind = kindOf(s.held);
+    // The mouse always has a verb: fire, honk, or swing what is in hand —
+    // and an empty hand swings a punch.
+    const click = isGun(handKind) ? "Fire" : handKind === "horn" ? "Honk" : "Punch";
+    $("interact").hidden = !document.pointerLockElement && !previewControls;
     $("interact").innerHTML = s.held
-      ? `<kbd class="key">E</kbd> Drop <span style="margin-left:10px"><kbd class="key">Q</kbd> Throw</span>${
-          isTool(kindOf(s.held))
-            ? `<span style="margin-left:10px"><kbd class="key">Click</kbd> ${
-                isGun(kindOf(s.held)) ? "Fire" : kindOf(s.held) === "bat" ? "Swing" : "Honk"
-              }</span>`
-            : ""
-        }`
+      ? `<kbd class="key">E</kbd> Drop <span style="margin-left:10px"><kbd class="key">Q</kbd> Throw</span><span style="margin-left:10px"><kbd class="key">Click</kbd> ${click}</span>`
       : door
         ? arena.doors.find((d) => d.id === door)?.auto
           ? "Opens by itself"
           : `<kbd class="key">E</kbd> ${arena.doors.find((d) => d.id === door)!.zone}`
-        : `<kbd class="key">E</kbd> Pick up the ${propLabel(kindOf(target)) ?? "thing"}`;
+        : target
+          ? `<kbd class="key">E</kbd> Pick up the ${propLabel(kindOf(target)) ?? "thing"}<span style="margin-left:10px"><kbd class="key">Click</kbd> Punch</span>`
+          : `<kbd class="key">Click</kbd> Punch`;
     const [zoneName, zoneDesc] = zone(s);
     $("zone-name").textContent = zoneName;
     $("zone-desc").textContent = zoneDesc;

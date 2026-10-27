@@ -119,8 +119,9 @@ in the next input batch. Full player arrays carry player removals. Prop records 
 fixed room props; live gun pellets are the exception — they spawn and despawn
 mid-room and ride the same sparse prop channel under IDs at or above
 `PELLET_ID_BASE`, so a client adds a mesh for an ID it has not seen and removes
-one when it vanishes. A prop's kind — crate, ball, gun, bat, horn, chair,
-table, trashcan, bottle or bucket — is static, read from `PROPS` by ID on both
+one when it vanishes. A prop's kind — a gun (`gun`, `smg`, `shotgun`, `rifle`,
+`launcher`, `seeker`), `horn`, `chair`, `table`, `trashcan` or `bottle` — is
+static, read from `PROPS` by ID on both
 sides, and never travels on the wire; a pellet is recognised purely by its ID
 range.
 
@@ -167,10 +168,12 @@ client-side. An untouched gun dissolves after `AIR.linger` ticks and everyone
 gets `{type:"airdrop-gone", ids}`; a gun someone picked up is an ordinary prop
 from then on, and the countdown retires whatever is left in the air.
 
-`swing` requires a held bat and uses an authority-owned swept sphere over the
-short `MELEE.range`; a struck player gets the same kind of shove and stagger as
-a gun hit. `{type:"swing", id, object, hit}` drives the visible swing and impact
-effects. `honk` requires a held horn and is authority-rate-limited by
+`swing` is the bare-handed punch — and the swing of whatever junk is in hand —
+so it is refused while a gun or the horn owns the mouse. It uses an
+authority-owned swept sphere over the short `FIST.range`; a struck player gets
+the same kind of shove and stagger as a gun hit. `{type:"swing", id, object,
+hit}` drives the visible swing and impact effects, and `object` is `0` for a
+punch. `honk` requires a held horn and is authority-rate-limited by
 `HORN.cooldown`; accepted uses are broadcast as spatial `sound` events.
 
 `door` toggles one hand-worked leaf and is accepted only when that leaf is under

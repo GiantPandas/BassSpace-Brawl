@@ -49,6 +49,8 @@ type Avatar = {
   loudness: number;
   speaking: boolean;
   mouth: number;
+  /** Scene time of the last punch, so the arm can swing it out. -1 = never. */
+  punch: number;
   /** The raised-shield bubble, hidden until `block` says it is up. */
   shield?: THREE.Mesh;
 };
@@ -134,7 +136,7 @@ export class GameScene {
   /** Muzzle flashes, tracers and impact sparks; they fade out and delete themselves. */
   effects: { mesh: THREE.Mesh; life: number; ttl: number; shrink: boolean; grow?: number }[] = [];
   private propBases = new Map<number, { position: THREE.Vector3; rotation: THREE.Quaternion }>();
-  private propUses = new Map<number, { kind: PropKind; started: number }>();
+  private propUses = new Map<number, { kind: "swing" | "horn"; started: number }>();
   avatars = new Map<number, Avatar>();
   /** Last cosmetics seen per player; applied when the avatar (re)appears. */
   private cosmeticCache = new Map<number, Cosmetics>();
@@ -547,34 +549,6 @@ export class GameScene {
    *  arena props, the prop's id for a gun that fell out of the sky. */
   propMesh(kind: PropKind, seed: number) {
     const root = new THREE.Group();
-    if (kind === "ball") {
-      const ball = new THREE.Mesh(
-        new THREE.SphereGeometry(0.3, 32, 24),
-        new THREE.MeshStandardMaterial({
-          color: PALETTE[seed % 8],
-          roughness: 0.42,
-        }),
-      );
-      ball.castShadow = true;
-      ball.receiveShadow = true;
-      root.add(ball);
-      for (const axis of [0, 1]) {
-        const seam = new THREE.Mesh(
-          new THREE.TorusGeometry(0.301, 0.016, 10, 48),
-          new THREE.MeshStandardMaterial({ color: "#f4ecd8", roughness: 0.55 }),
-        );
-        if (axis === 0) seam.rotation.x = Math.PI / 2;
-        else seam.rotation.y = Math.PI / 2;
-        root.add(seam);
-      }
-      const valve = new THREE.Mesh(
-        new THREE.SphereGeometry(0.034, 12, 8),
-        new THREE.MeshStandardMaterial({ color: "#2e2a26", roughness: 0.5 }),
-      );
-      valve.position.set(0, 0.29, 0.05);
-      root.add(valve);
-      return root;
-    }
     if (isGun(kind)) {
       // Modelled pointing down -z, which is where its holder is looking. The
       // receiver is children[0] — the body `setHighlight` tints — and every gun
@@ -692,50 +666,6 @@ export class GameScene {
           break;
         }
       }
-      return root;
-    }
-    if (kind === "bat") {
-      // The handle is at +z and the barrel reaches forward along -z.
-      const barrel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.1, 0.055, 0.9, 14),
-        new THREE.MeshStandardMaterial({
-          color: PALETTE[seed % 8],
-          roughness: 0.72,
-        }),
-      );
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.z = -0.18;
-      barrel.castShadow = true;
-      root.add(barrel);
-      const grip = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.043, 0.043, 0.34, 12),
-        new THREE.MeshStandardMaterial({ color: "#3b2b22", roughness: 0.9 }),
-      );
-      grip.rotation.x = Math.PI / 2;
-      grip.position.z = 0.43;
-      root.add(grip);
-      const bandMat = new THREE.MeshStandardMaterial({ color: "#ece0bc", roughness: 0.7 });
-      const band = new THREE.Mesh(
-        new THREE.TorusGeometry(0.087, 0.011, 8, 20),
-        bandMat,
-      );
-      band.rotation.x = Math.PI / 2;
-      band.position.z = -0.5;
-      root.add(band);
-      for (const gz of [0.34, 0.44, 0.54] as const) {
-        const wrap = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.008, 8, 16), bandMat);
-        wrap.rotation.x = Math.PI / 2;
-        wrap.position.z = gz;
-        root.add(wrap);
-      }
-      const knob = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.058, 0.05, 0.05, 12),
-        new THREE.MeshStandardMaterial({ color: "#3b2b22", roughness: 0.9 }),
-      );
-      knob.rotation.x = Math.PI / 2;
-      knob.position.z = 0.615;
-      knob.castShadow = true;
-      root.add(knob);
       return root;
     }
     if (kind === "horn") {
@@ -878,75 +808,6 @@ export class GameScene {
       label.position.y = -0.08;
       root.add(label);
       return root;
-    }
-    if (kind === "bucket") {
-      const tint = new THREE.MeshStandardMaterial({ color: PALETTE[seed % 8], roughness: 0.4, metalness: 0.3, side: THREE.DoubleSide });
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.155, 0.3, 12, 1, true), tint);
-      body.position.y = -0.02;
-      body.castShadow = true;
-      root.add(body);
-      const steel = new THREE.MeshStandardMaterial({ color: "#8a8f96", roughness: 0.35, metalness: 0.5 });
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.175, 0.018, 8, 24), steel);
-      rim.rotation.x = Math.PI / 2;
-      rim.position.y = 0.14;
-      root.add(rim);
-      const handle = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.01, 6, 20, Math.PI), steel);
-      handle.position.y = 0.14;
-      handle.castShadow = true;
-      root.add(handle);
-      for (const lx of [-0.175, 0.175] as const) {
-        const lug = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.04, 0.03), steel);
-        lug.position.set(lx, 0.14, 0);
-        root.add(lug);
-      }
-      return root;
-    }
-    const mat = new THREE.MeshStandardMaterial({
-      color: PALETTE[seed % 8],
-      roughness: 0.8,
-    });
-    // Board crate: the tinted box reads as boards, framed by a dark wood cage
-    // of corner posts and edge rails so tumbles catch the light. Children[0]
-    // stays the tintable body so `setHighlight` still writes its emissive.
-    const box = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.56, 0.56), mat);
-    box.castShadow = true;
-    box.receiveShadow = true;
-    root.add(box);
-    const wood = new THREE.MeshStandardMaterial({ color: "#54402c", roughness: 0.95 });
-    // Plank seams: thin belts a hair proud of every face.
-    for (const y of [-0.28, 0.28] as const) {
-      const seam = new THREE.Mesh(new THREE.BoxGeometry(0.565, 0.02, 0.565), wood);
-      seam.position.y = y;
-      root.add(seam);
-    }
-    for (const [cx, cz] of [[-0.29, -0.29], [0.29, -0.29], [-0.29, 0.29], [0.29, 0.29]] as const) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.6, 0.055), wood);
-      post.position.set(cx, 0, cz);
-      post.castShadow = true;
-      root.add(post);
-    }
-    for (const y of [-0.29, 0.29] as const) {
-      for (const s of [-1, 1] as const) {
-        const railX = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.05, 0.05), wood);
-        railX.position.set(0, y, s * 0.29);
-        railX.castShadow = true;
-        root.add(railX);
-        const railZ = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.62), wood);
-        railZ.position.set(s * 0.29, y, 0);
-        railZ.castShadow = true;
-        root.add(railZ);
-      }
-    }
-    // Stamped stencil: a pale patch slashed through, on the two z faces.
-    const stencil = new THREE.MeshStandardMaterial({ color: "#ece0bc", roughness: 0.9 });
-    for (const sz of [-1, 1] as const) {
-      const patch = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.012), stencil);
-      patch.position.set(0, 0.02, sz * 0.282);
-      root.add(patch);
-      const slash = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.05, 0.008), stencil);
-      slash.position.set(0, 0.02, sz * 0.288);
-      slash.rotation.z = 0.79;
-      root.add(slash);
     }
     return root;
   }
@@ -1211,8 +1072,15 @@ export class GameScene {
     const p = gun.localToWorld(new THREE.Vector3(0, 0.02, -GUNS[kind].muzzleZ));
     return { x: p.x, y: p.y, z: p.z };
   }
-  useProp(id: number, kind: PropKind) {
+  /** The horn's own tell: a squeeze, not a swing. */
+  useProp(id: number, kind: "horn") {
     this.propUses.set(id, { kind, started: this.clock });
+  }
+  /** A punch: the arm shoves forward, and any junk in the hand swings with it. */
+  punch(playerId: number, held = 0) {
+    const a = this.avatars.get(playerId);
+    if (a) a.punch = this.clock;
+    if (held) this.propUses.set(held, { kind: "swing", started: this.clock });
   }
   avatar(id: number, name: string, color = id - 1) {
     const existing = this.avatars.get(id);
@@ -1324,6 +1192,7 @@ export class GameScene {
       loudness: -1,
       speaking: false,
       mouth: 0,
+      punch: -1,
     };
     avatar.driven = [avatar.armL, avatar.armR, avatar.head, avatar.jaw].filter(
       (d) => d !== undefined,
@@ -1675,9 +1544,19 @@ export class GameScene {
       // the held-prop pose.
       if (pose.l !== undefined) hinge(a.armL, pose.l);
       if (pose.r !== undefined) hinge(a.armR, pose.r);
-    } else if (s.held) {
-      hinge(a.armL, HOLD_LIFT);
-      hinge(a.armR, HOLD_LIFT);
+    } else {
+      // A punch rides the same rule: one angle per arm per frame, so a driven
+      // arm never rotates away from the pose the mixer recorded.
+      let l: number | undefined, r: number | undefined;
+      if (s.held) l = r = HOLD_LIFT;
+      const swung = this.clock - a.punch;
+      if (swung < 0.42) {
+        const t = Math.sin(Math.min(1, swung / 0.34) * Math.PI);
+        r = (r ?? 0) - 1.55 * t;
+        l = (l ?? 0) - 0.45 * t;
+      }
+      if (l !== undefined) hinge(a.armL, l);
+      if (r !== undefined) hinge(a.armR, r);
     }
     return a;
   }
@@ -1777,8 +1656,11 @@ export class GameScene {
   setHighlight(id: number) {
     if (id === this.highlight) return;
     for (const [key, group] of this.props) {
-      const mat = (group.children[0] as THREE.Mesh)
-        .material as THREE.MeshStandardMaterial;
+      // Props the client can't build a mesh for (a kind this arena never uses)
+      // have no tintable body; skip them instead of killing the frame loop.
+      const body = group.children[0] as THREE.Mesh | undefined;
+      const mat = body?.material as THREE.MeshStandardMaterial | undefined;
+      if (!mat) continue;
       mat.emissive.set(key === id ? "#a5c666" : "#000000");
       mat.emissiveIntensity = key === id ? 0.28 : 0;
     }
@@ -1834,7 +1716,7 @@ export class GameScene {
       }
       prop.position.copy(base.position);
       prop.quaternion.copy(base.rotation);
-      if (use.kind === "bat") {
+      if (use.kind === "swing") {
         const swing = Math.sin(Math.min(1, age / 0.34) * Math.PI) * 1.2;
         prop.rotateY(-swing);
         prop.rotateX(swing * 0.28);

@@ -4,11 +4,12 @@ import {
   AUTO_RANGE,
   DOOR_SLAM,
   DOOR_TRAVEL,
+  FIST,
   GUNS,
   HORN,
   IMPACT,
-  MELEE,
   STEP,
+  THROW,
   TINY_ARENA,
   WEAPON,
   WINDOW,
@@ -110,30 +111,20 @@ export type Pellet = {
 export type Swing = { id: number; object: number; hit: number };
 /** Per-kind default restitutions; chaos "bounce" overrides them all. */
 const PROP_BOUNCE: Record<PropKind, number> = {
-  ball: 0.86,
   gun: 0.1,
   smg: 0.1,
   shotgun: 0.1,
   rifle: 0.1,
   launcher: 0.1,
   seeker: 0.1,
-  bat: 0.2,
   horn: 0.14,
   chair: 0.2,
   table: 0.1,
   trashcan: 0.15,
   bottle: 0.3,
-  bucket: 0.12,
-  crate: 0.18,
 };
-/** Each prop kind is a different thing to throw: a crate thuds, a ball bounces. */
+/** Each prop kind is a different thing to throw: a bottle skips, a table thuds. */
 function shape(kind: PropKind) {
-  if (kind === "ball")
-    return RAPIER.ColliderDesc.ball(0.3)
-      .setMass(0.9)
-      .setFriction(0.45)
-      .setRestitution(0.86)
-      .setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Max);
   if (isGun(kind)) {
     // Every gun is a hard metal box; only its heft and length differ.
     const [hx, hy, hz] = GUNS[kind].collider.s;
@@ -142,11 +133,6 @@ function shape(kind: PropKind) {
       .setFriction(0.7)
       .setRestitution(0.1);
   }
-  if (kind === "bat")
-    return RAPIER.ColliderDesc.cuboid(0.09, 0.09, 0.55)
-      .setMass(0.95)
-      .setFriction(0.72)
-      .setRestitution(0.2);
   if (kind === "horn")
     return RAPIER.ColliderDesc.cuboid(0.16, 0.13, 0.32)
       .setMass(0.7)
@@ -172,11 +158,6 @@ function shape(kind: PropKind) {
       .setMass(0.7)
       .setFriction(0.65)
       .setRestitution(0.3);
-  if (kind === "bucket")
-    return RAPIER.ColliderDesc.cuboid(0.19, 0.17, 0.19)
-      .setMass(0.9)
-      .setFriction(0.72)
-      .setRestitution(0.12);
   return RAPIER.ColliderDesc.cuboid(0.3, 0.3, 0.3)
     .setMass(1.5)
     .setFriction(0.8)
@@ -290,15 +271,14 @@ export class Simulation {
       });
     }
     arena.props.forEach((prop, i) => {
-      const bouncy = prop.kind === "ball";
       const body = this.world.createRigidBody(
         (prediction
           ? RAPIER.RigidBodyDesc.kinematicPositionBased()
           : RAPIER.RigidBodyDesc.dynamic()
         )
           .setTranslation(...prop.p)
-          .setLinearDamping(bouncy ? 0.08 : 0.6)
-          .setAngularDamping(bouncy ? 0.12 : 0.8)
+          .setLinearDamping(0.6)
+          .setAngularDamping(0.8)
           .setCcdEnabled(true),
       );
       const collider = this.world.createCollider(shape(prop.kind), body);
@@ -604,11 +584,7 @@ export class Simulation {
         col.setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Max);
       } else {
         col.setRestitution(r);
-        col.setRestitutionCombineRule(
-          kind === "ball"
-            ? RAPIER.CoefficientCombineRule.Max
-            : RAPIER.CoefficientCombineRule.Min,
-        );
+        col.setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min);
       }
     }
   }
@@ -629,9 +605,9 @@ export class Simulation {
       span = Math.max(0.001, Math.hypot(d.x, d.z)),
       right = { x: -d.z / span, z: d.x / span },
       gun = isGun(kind) ? GUNS[kind] : null,
-      forward = gun ? gun.hold.forward : kind === "bat" ? 0.76 : 0.72,
-      sideways = gun ? gun.hold.sideways : kind === "bat" ? 0.34 : 0.29,
-      lowered = gun ? gun.hold.lowered : kind === "bat" ? 0.27 : 0.16;
+      forward = gun ? gun.hold.forward : 0.72,
+      sideways = gun ? gun.hold.sideways : 0.29,
+      lowered = gun ? gun.hold.lowered : 0.16;
     const cy = Math.cos(s.yaw / 2),
       sy = Math.sin(s.yaw / 2),
       cx = Math.cos(s.pitch / 2),
@@ -898,31 +874,39 @@ export class Simulation {
     );
     return true;
   }
-  /** Swing the held bat through a forgiving capsule-sized lane in front. */
+  /**
+   * Swing a bare fist — or whatever junk is in the hand — through a forgiving
+   * capsule-sized lane in front. A gun or a horn owns the mouse button, so the
+   * punch refuses while you are armed; unarmed is the whole point of it.
+   */
   swing(playerId: number): Swing | null {
     const c = this.players.get(playerId);
-    if (!c || this.kind(c.state.held) !== "bat") return null;
+    if (!c) return null;
+    const kind = this.kind(c.state.held);
+    if (isGun(kind) || kind === "horn") return null;
     if (this.frame < (this.meleeCooldowns.get(playerId) ?? 0)) return null;
-    this.meleeCooldowns.set(playerId, this.frame + MELEE.cooldown);
+    this.meleeCooldowns.set(playerId, this.frame + FIST.cooldown);
     const s = c.state,
       d = this.direction(s),
       targets = new Map(
         [...this.players].map(([id, p]) => [p.collider.handle, id]),
       ),
-      held = this.props.get(s.held)!;
+      held = s.held ? this.props.get(s.held) : undefined;
     const hit = this.world.castShape(
       this.eye(s),
       { x: 0, y: 0, z: 0, w: 1 },
       d,
-      new RAPIER.Ball(MELEE.radius),
+      new RAPIER.Ball(FIST.radius),
       0.01,
-      MELEE.range,
+      FIST.range,
       true,
       undefined,
       undefined,
       c.collider,
       c.body,
-      (col: RAPIER.Collider) => col.handle !== held.collider(0).handle,
+      held
+        ? (col: RAPIER.Collider) => col.handle !== held.collider(0).handle
+        : undefined,
     );
     const victim = hit ? (targets.get(hit.collider.handle) ?? 0) : 0,
       struck = this.players.get(victim),
@@ -930,13 +914,14 @@ export class Simulation {
     if (struck) {
       // The victim's own wound decides how far they fly.
       const hurt = mult * this.knockScale(struck.state.hp);
-      struck.state.vx += d.x * MELEE.knock * hurt;
-      struck.state.vz += d.z * MELEE.knock * hurt;
-      struck.state.vy = Math.max(struck.state.vy, 0) + MELEE.lift * hurt;
-      struck.state.stagger = MELEE.stagger;
+      struck.state.vx += d.x * FIST.knock * hurt;
+      struck.state.vz += d.z * FIST.knock * hurt;
+      struck.state.vy = Math.max(struck.state.vy, 0) + FIST.lift * hurt;
+      struck.state.stagger = FIST.stagger;
+      this.hurt(struck.state, FIST.impact);
     }
-    s.vx -= d.x * MELEE.recoil;
-    s.vz -= d.z * MELEE.recoil;
+    s.vx -= d.x * FIST.recoil;
+    s.vz -= d.z * FIST.recoil;
     return { id: playerId, object: s.held, hit: victim };
   }
   honk(playerId: number) {
@@ -968,11 +953,7 @@ export class Simulation {
       kind = this.kind(objectId);
     if (col && kind) {
       col.setRestitution(PROP_BOUNCE[kind]);
-      col.setRestitutionCombineRule(
-        kind === "ball"
-          ? RAPIER.CoefficientCombineRule.Max
-          : RAPIER.CoefficientCombineRule.Min,
-      );
+      col.setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min);
     }
     // Every gun hands you its own magazine plus whatever spare rounds are
     // still inside it, and a reload already running is about a gun you no
@@ -999,16 +980,23 @@ export class Simulation {
       true,
     );
     const d = this.direction(c.state),
-      k = throwing ? 10 : 1;
+      k = throwing ? THROW.speed : 1;
     body.setLinvel(
       {
         x: c.state.vx + d.x * k,
-        y: Math.max(0, c.state.vy) + d.y * k + (throwing ? 2 : 0),
+        y: Math.max(0, c.state.vy) + d.y * k + (throwing ? THROW.lift : 0),
         z: c.state.vz + d.z * k,
       },
       true,
     );
-    body.setAngvel({ x: throwing ? 2 : 0, y: throwing ? 1 : 0, z: 0 }, true);
+    body.setAngvel(
+      {
+        x: throwing ? THROW.spin : 0,
+        y: throwing ? THROW.spin * 0.5 : 0,
+        z: 0,
+      },
+      true,
+    );
     // Junk cards (design doc §8): the thrower's build rides with the prop.
     const st = buildStats(c.state.build),
       kind = this.kind(id),
@@ -1023,7 +1011,7 @@ export class Simulation {
     this.propMeta.set(id, {
       thrower: playerId,
       build: c.state.build,
-      angry: st.angryBall && kind === "ball",
+      angry: st.angryBall,
       magnet: st.magnetGlove && !throwing,
       empty: throwing && spent,
       born: this.frame,
@@ -1169,7 +1157,7 @@ export class Simulation {
       // props still pull back when a wall would clip them.
       const kind = this.kind(c.state.held),
         gun = isGun(kind),
-        tool = gun || kind === "bat" || kind === "horn",
+        tool = gun || kind === "horn",
         reach = gun ? 1.5 : 2.25,
         lowered = gun ? 0.18 : 0,
         sideways = gun ? 0.28 : 0;

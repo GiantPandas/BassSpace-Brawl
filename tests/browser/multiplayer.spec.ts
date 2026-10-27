@@ -252,19 +252,47 @@ test("Chrome pointer lock, Blender character, pickup, throw and crouch", async (
   // Aim at a real prop rather than a guessed angle; props settle where they like.
   const picked = await page.evaluate(async () => {
     const d = (window as any).__friendslop,
-      s = d.state,
-      slab = d.sim.arena.level.find((b: any) => b.kind === "stage");
-    const onSlab = (p: any, b: any) =>
-      Math.abs(p.p[0] - b.p[0]) <= b.s[0] / 2 && Math.abs(p.p[2] - b.p[2]) <= b.s[2] / 2;
-    let best: any = null;
-    d.sim.arena.props.forEach((p: any, i: number) => {
-      if (Math.abs(p.p[1] - 0.5) > 0.01 || !onSlab(p, slab)) return;
-      const dd = (p.p[0] - s.x) ** 2 + (p.p[2] - s.z) ** 2;
-      if (!best || dd < best.d) best = { d: dd, id: i + 1, x: p.p[0], z: p.p[2] };
-    });
-    if (!best) return 0;
-    await (window as any).walkTo(best.x, best.z);
-    return (window as any).aimAtProp(best.id);
+      s = d.state;
+    // Props on the slab the player is actually standing on: walking to another
+    // level means crossing the void, which eliminates them mid-test.
+    const top = (b: any) => b.p[1] + b.s[1] / 2;
+    // The slab you are standing on: it must contain you, not merely sit below.
+    const over = (b: any) =>
+      Math.abs(s.x - b.p[0]) <= b.s[0] / 2 && Math.abs(s.z - b.p[2]) <= b.s[2] / 2;
+    const box = d.sim.arena.level
+      .filter((b: any) => over(b) && top(b) <= s.y + 0.6)
+      .sort((a: any, b: any) => top(b) - top(a))[0];
+    if (!box) return 0;
+    const all = d.sim.arena.props
+      .map((p: any, i: number) => ({
+        id: i + 1,
+        x: p.p[0],
+        z: p.p[2],
+        d: (p.p[0] - s.x) ** 2 + (p.p[2] - s.z) ** 2,
+        ok:
+          Math.abs(p.p[1] - (top(box) + 0.5)) <= 0.01 &&
+          Math.abs(p.p[0] - box.p[0]) <= box.s[0] / 2 &&
+          Math.abs(p.p[2] - box.p[2]) <= box.s[2] / 2,
+      }))
+      .sort((a: any, b: any) => a.d - b.d);
+    // Nothing on your own slab? The nearest one elsewhere still beats failing,
+    // and a short walk across a gap is survivable.
+    const near = (all.filter((c: any) => c.ok).length
+      ? all.filter((c: any) => c.ok)
+      : all
+    ).slice(0, 5);
+    // Props settle where they like and a pad or cover wall can sit in the way:
+    // walk to each nearby one and sweep the aim until the eye ray lands on it.
+    for (const c of near) {
+      await (window as any).walkTo(c.x, c.z);
+      const mesh = d.scene.props.get(c.id)?.position;
+      if (!mesh) continue;
+      for (let i = 0; i < 4; i++) {
+        await (window as any).aimAt(mesh.x, mesh.y + (i - 1) * 0.1, mesh.z);
+        if (d.sim.target(d.state) === c.id) return c.id;
+      }
+    }
+    return 0;
   });
   expect(picked).toBeGreaterThan(0);
   await page.evaluate(() => (window as any).__friendslop.action());
@@ -581,28 +609,59 @@ test("a gun shove, then a bounce pad flings you at the perch", async ({
   await controls(page);
   await controls(friend);
   await page.bringToFront();
-  // Both start on the centre slab; a gun always rests within walking reach.
+  // Both start on solid ground: use a gun on that same slab — a different level
+  // means crossing the void — and prefer the plain pistol, which shoves rather
+  // than detonating.
   const gun = await page.evaluate(async () => {
     const d = (window as any).__friendslop,
-      s = d.state,
-      slab = d.sim.arena.level.find((b: any) => b.kind === "stage");
-    const onSlab = (x: number, z: number, b: any) =>
-      Math.abs(x - b.p[0]) <= b.s[0] / 2 && Math.abs(z - b.p[2]) <= b.s[2] / 2;
-    let best: any = null;
-    d.sim.arena.props.forEach((p: any, i: number) => {
-      if (p.kind !== "gun" || !onSlab(p.p[0], p.p[2], slab)) return;
-      const dd = (p.p[0] - s.x) ** 2 + (p.p[2] - s.z) ** 2;
-      if (!best || dd < best.d) best = { d: dd, id: i + 1, x: p.p[0], z: p.p[2] };
-    });
-    if (!best) return 0;
-    await (window as any).walkTo(best.x, best.z);
-    return (window as any).aimAtProp(best.id);
+      s = d.state;
+    const top = (b: any) => b.p[1] + b.s[1] / 2;
+    // The slab you are standing on: it must contain you, not merely sit below.
+    const over = (b: any) =>
+      Math.abs(s.x - b.p[0]) <= b.s[0] / 2 && Math.abs(s.z - b.p[2]) <= b.s[2] / 2;
+    const box = d.sim.arena.level
+      .filter((b: any) => over(b) && top(b) <= s.y + 0.6)
+      .sort((a: any, b: any) => top(b) - top(a))[0];
+    if (!box) return 0;
+    const all = d.sim.arena.props.map((p: any, i: number) => ({
+      id: i + 1,
+      kind: p.kind,
+      x: p.p[0],
+      z: p.p[2],
+      d: (p.p[0] - s.x) ** 2 + (p.p[2] - s.z) ** 2,
+      gun: p.kind in d.GUNS,
+      onSlab:
+        Math.abs(p.p[1] - (top(box) + 0.5)) <= 0.01 &&
+        Math.abs(p.p[0] - box.p[0]) <= box.s[0] / 2 &&
+        Math.abs(p.p[2] - box.p[2]) <= box.s[2] / 2,
+    }));
+    const guns = all.filter((c: any) => c.gun);
+    // Prefer the same slab, then the plain pistol, then whatever is nearest.
+    const near = (guns.filter((c: any) => c.onSlab).length
+      ? guns.filter((c: any) => c.onSlab)
+      : guns
+    )
+      .sort(
+        (a: any, b: any) =>
+          (a.kind === "gun" ? 0 : 1) - (b.kind === "gun" ? 0 : 1) || a.d - b.d,
+      )
+      .slice(0, 5);
+    for (const c of near) {
+      await (window as any).walkTo(c.x, c.z);
+      const mesh = d.scene.props.get(c.id)?.position;
+      if (!mesh) continue;
+      // Props settle where they like; sweep the aim until the eye ray lands.
+      for (let i = 0; i < 4; i++) {
+        await (window as any).aimAt(mesh.x, mesh.y + (i - 1) * 0.1, mesh.z);
+        if (d.sim.target(d.state) === c.id) return c.id;
+      }
+    }
+    return 0;
   });
   expect(gun).toBeGreaterThan(0);
   await friend.evaluate(() => (window as any).walkTo(0, 0));
   await page.evaluate(() => (window as any).__friendslop.action());
   await expect.poll(async () => (await state(page)).held).toBe(gun);
-  await page.screenshot({ path: "test-results/gun.png" });
   await page.screenshot({ path: "test-results/gun.png" });
   // A cover wall may stand between them: sidestep along it, staying clear of
   // bounce pads, and try again from another angle.

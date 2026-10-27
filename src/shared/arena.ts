@@ -370,29 +370,26 @@ export const buildArena = (seed: string): ArenaLayout => {
     "rifle",
     "launcher",
     "seeker",
-    "bat",
-    "bat",
     "horn",
-    "ball",
-    "ball",
-    "crate",
-    "crate",
-    "crate",
+    "trashcan",
     "trashcan",
     "bottle",
-    "bucket",
+    "bottle",
     "chair",
   ];
-  const junk: Prop["kind"][] = ["table", "trashcan", "bottle", "bucket"];
+  const junk: Prop["kind"][] = ["table", "trashcan", "bottle", "chair"];
   const wanted = [
     ...load,
-    ...Array(1 + Math.floor(r() * 3)).map(() => junk[Math.floor(r() * junk.length)]),
+    // `Array.from`, not `Array(n).map`: `Array(n)` is sparse, so `map` skips the
+    // holes and every junk pick would come out `undefined` — a prop with no kind,
+    // which renders as nothing and breaks the highlight.
+    ...Array.from({ length: 1 + Math.floor(r() * 3) }, () => junk[Math.floor(r() * junk.length)]),
   ];
   for (const kind of wanted) {
     for (let attempt = 0; attempt < 20; attempt++) {
-      // The first gun, horn and crate always rest on the centre slab: the
-      // opening fight and the browser tests need reachable ground there.
-      const centreFirst = !props.some((p) => p.kind === kind) && (kind === "gun" || kind === "horn" || kind === "crate");
+      // The first gun and horn always rest on the centre slab: the opening
+      // fight and the browser tests need reachable ground there.
+      const centreFirst = !props.some((p) => p.kind === kind) && (kind === "gun" || kind === "horn");
       const n = centreFirst ? nodes[0] : nodes[Math.floor(r() * Math.max(1, nodes.length - 1))];
       if (n.hw < 2.4 || n.hd < 2.4) continue;
       const x = n.cx + (r() * 2 - 1) * Math.max(0, n.hw - 1),
@@ -430,10 +427,9 @@ export const buildArena = (seed: string): ArenaLayout => {
     ["rifle", 0.75, -0.25],
     ["launcher", -0.75, 0.25],
     ["seeker", 0, -0.9],
-    ["bat", 0.6, -0.6],
     ["horn", -0.6, 0.6],
-    ["ball", 0.6, 0.6],
-    ["crate", 0, 0.3],
+    ["trashcan", 0.6, 0.6],
+    ["bottle", 0, 0.3],
   ];
   for (const [kind, fx, fz] of fallback) {
     if (props.some((p) => p.kind === kind)) continue;

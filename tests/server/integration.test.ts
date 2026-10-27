@@ -275,14 +275,13 @@ test("the server decides every shot, and the whole room hears it", async () => {
   assert.equal(victim.state.stagger > 0, true);
   assert.equal(room.members.has(b.welcome.id), true, "and nobody is removed");
 
-  const bat = arena.props.findIndex((p) => p.kind === "bat") + 1;
-  shooter.state.held = bat;
+  // Bare-handed: the swing is a punch, so it reports nothing in hand.
+  shooter.state.held = 0;
   room.sim.owners.set(gun, 0);
   room.sim.props.get(gun)!.setTranslation({ x: -20, y: 1, z: -20 }, true);
   room.sim.props
     .get(gun)!
     .setNextKinematicTranslation({ x: -20, y: 1, z: -20 });
-  room.sim.owners.set(bat, a.welcome.id);
   room.sim.restore(victim, {
     ...victim.state,
     x: shooter.state.x + 0.3,
@@ -291,11 +290,10 @@ test("the server decides every shot, and the whole room hears it", async () => {
   });
   const swung = wait(b.ws, (m) => m.type === "swing");
   a.ws.send(JSON.stringify({ type: "action", request: 4, action: "swing" }));
-  assert.equal((await swung).object, bat, "the room sees the authoritative swing");
+  assert.equal((await swung).object, 0, "the room sees a punch, not a held prop");
 
   const horn = arena.props.findIndex((p) => p.kind === "horn") + 1;
   shooter.state.held = horn;
-  room.sim.owners.set(bat, 0);
   room.sim.owners.set(horn, a.welcome.id);
   const honked = wait(
     b.ws,

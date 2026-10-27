@@ -18,13 +18,15 @@ import {
 } from "../src/shared/simulation.js";
 import {
   AIR,
+  FIST,
   HORN,
-  MELEE,
   PADS,
   PROPS,
   STEP,
+  THROW,
   WEAPON,
   GUNS,
+  isGun,
   reserveOf,
   type GunKind,
 } from "../src/shared/level.js";
@@ -359,11 +361,11 @@ test("the arena is a bounded square around the stage", () => {
   }
   sim.dispose();
 });
-test("a bat has a short forgiving shove and a horn is rate-limited", () => {
+test("a bare fist shoves and wounds, a gun refuses to swing, a horn is rate-limited", () => {
   const sim = new Simulation(),
     hitter = sim.addPlayer(1),
     victim = sim.addPlayer(2),
-    bat = PROPS.findIndex((p) => p.kind === "bat") + 1,
+    gun = PROPS.findIndex((p) => isGun(p.kind)) + 1,
     horn = PROPS.findIndex((p) => p.kind === "horn") + 1;
   sim.restore(hitter, {
     ...hitter.state,
@@ -372,19 +374,30 @@ test("a bat has a short forgiving shove and a horn is rate-limited", () => {
     z: 2,
     yaw: 0,
     pitch: 0,
-    held: bat,
+    held: 0,
   });
-  sim.restore(victim, { ...victim.state, x: 0.35, y: 0.87, z: 0.15 });
-  sim.owners.set(bat, 1);
+  sim.restore(victim, {
+    ...victim.state,
+    x: 0.35,
+    y: 0.87,
+    z: 0.15,
+    hp: COMBAT.hpMax,
+  });
   sim.step();
   const swing = sim.swing(1);
-  assert.equal(swing?.hit, 2);
-  assert.equal(sim.swing(1), null, "the bat cannot be spammed every tick");
-  assert.equal(victim.state.stagger, MELEE.stagger);
-  assert.ok(victim.state.vz < -8, "the bat launches away from its hitter");
+  assert.equal(swing?.hit, 2, "an empty hand still lands");
+  assert.equal(swing?.object, 0, "and swings nothing but itself");
+  assert.equal(victim.state.stagger, FIST.stagger);
+  assert.ok(victim.state.vz < -8, "the punch launches away from its hitter");
+  assert.ok(victim.state.hp < COMBAT.hpMax, "and opens a wound");
+  assert.equal(sim.swing(1), null, "a punch cannot be spammed every tick");
 
+  for (let i = 0; i < FIST.cooldown + 2; i++) sim.step();
+  hitter.state.held = gun;
+  sim.owners.set(gun, 1);
+  assert.equal(sim.swing(1), null, "an armed player swings nothing");
   hitter.state.held = horn;
-  sim.owners.set(bat, 0);
+  sim.owners.set(gun, 0);
   sim.owners.set(horn, 1);
   assert.equal(sim.honk(1), true);
   assert.equal(sim.honk(1), false, "the horn is authority-rate-limited");
@@ -411,33 +424,42 @@ test("staggered players keep only a fraction of their own steering", () => {
   assert.ok(shoved < free * 0.45, `staggered ${shoved} against ${free}`);
   sim.dispose();
 });
-test("a dropped ball bounces back up where a crate lands flat", () => {
+test("a throw hurls the prop; setting it down barely moves it", () => {
   const sim = new Simulation();
-  const drop = (id: number) => {
+  const c = sim.addPlayer(1),
+    id = PROPS.findIndex((p) => p.kind === "trashcan") + 1;
+  const launch = (throwing: boolean) => {
+    sim.restore(c, {
+      ...c.state,
+      x: 0,
+      y: 0.87,
+      z: 0,
+      yaw: 0,
+      pitch: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      held: id,
+    });
+    sim.owners.set(id, 0);
     const body = sim.props.get(id)!;
-    body.setTranslation({ x: -5, y: 3, z: 2 }, true);
+    body.setTranslation({ x: 0, y: 0.9, z: 0 }, true);
     body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-    let landed = false,
-      rebound = 0;
-    for (let i = 0; i < 150; i++) {
-      sim.step();
-      const y = body.translation().y;
-      if (y < 0.45) landed = true;
-      if (landed) rebound = Math.max(rebound, y);
-    }
-    return rebound;
+    assert.equal(sim.release(1, throwing), true, "the hand opens");
+    const v = body.linvel();
+    return Math.hypot(v.x, v.y, v.z);
   };
-  const ball = PROPS.findIndex((p) => p.kind === "ball") + 1,
-    crate = PROPS.findIndex((p) => p.kind === "crate") + 1;
-  assert.ok(drop(ball) > 0.9, "a ball comes back to you");
-  assert.ok(drop(crate) < 0.55, "a crate stays where it fell");
+  const setDown = launch(false);
+  const thrown = launch(true);
+  assert.ok(thrown > THROW.speed * 0.9, `a throw leaves the hand at ${thrown} m/s`);
+  assert.ok(setDown < 2.5, `setting it down only nudges it (${setDown})`);
   sim.dispose();
 });
 test("hard impacts are recorded for sound and sparks, soft ones are not", () => {
   const sim = new Simulation();
-  const crate = PROPS.findIndex((p) => p.kind === "crate") + 1;
-  const body = sim.props.get(crate)!;
+  const trashcan = PROPS.findIndex((p) => p.kind === "trashcan") + 1;
+  const body = sim.props.get(trashcan)!;
   // A hard drop into the floor is loud.
   body.setTranslation({ x: -5, y: 3, z: 2 }, true);
   body.setLinvel({ x: 0, y: 0, z: 0 }, true);
@@ -539,21 +561,40 @@ test("quick draw refills the magazine sooner", () => {
 test("yeet multiplies the knockback of every hit", () => {
   const sim = new Simulation(),
     hitter = sim.addPlayer(1),
-    victim = sim.addPlayer(2),
-    bat = PROPS.findIndex((p) => p.kind === "bat") + 1;
-  sim.owners.set(bat, 1);
+    victim = sim.addPlayer(2);
   const swingAt = (build: number) => {
     hitter.state.build = build;
-    sim.restore(hitter, { ...hitter.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0, held: bat });
-    sim.restore(victim, { ...victim.state, x: 0.35, y: 0.87, z: 0.15, vx: 0, vy: 0, vz: 0, stagger: 0, out: 0 });
+    sim.restore(hitter, {
+      ...hitter.state,
+      x: 0,
+      y: 0.87,
+      z: 2,
+      yaw: 0,
+      pitch: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      held: 0,
+    });
+    sim.restore(victim, {
+      ...victim.state,
+      x: 0.35,
+      y: 0.87,
+      z: 0.15,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      stagger: 0,
+      out: 0,
+    });
     sim.step();
     const swing = sim.swing(1);
-    assert.equal(swing?.hit, 2, "the bat still finds the victim");
+    assert.equal(swing?.hit, 2, "the fist still finds the victim");
     return victim.state.vz;
   };
   const free = swingAt(0);
-  assert.ok(free < -8, "a plain bat already launches");
-  for (let i = 0; i < MELEE.cooldown + 5; i++) sim.step();
+  assert.ok(free < -8, "a plain punch already launches");
+  for (let i = 0; i < FIST.cooldown + 5; i++) sim.step();
   assert.ok(Math.abs(swingAt(cardBit("yeet"))) > Math.abs(free) * 1.45, "yeet hits harder");
   sim.dispose();
 });
@@ -1013,9 +1054,9 @@ test("junk props exist and rest on the floor", () => {
   const sim = new Simulation();
   sim.addPlayer(1);
   for (let i = 0; i < 30; i++) sim.step();
-  for (const kind of ["chair", "table", "trashcan", "bottle", "bucket"] as const) {
+  for (const kind of ["chair", "table", "trashcan", "bottle"] as const) {
     const id = PROPS.findIndex((p) => p.kind === kind) + 1;
-    assert.ok(id >= 2, `${kind} is in PROPS`);
+    assert.ok(id >= 1, `${kind} is in PROPS`);
     const st = sim.propStates().find((p) => p.id === id)!;
     assert.ok(st.y > 0.05 && st.y < 1.2, `${kind} rests on the floor`);
   }
@@ -1178,7 +1219,7 @@ function hold(sim: Simulation, playerId: number, kind: string) {
   assert.ok(sim.pickup(playerId, id), `picking up the ${kind} is accepted`);
   return id;
 }
-test("angry balls accelerate toward the nearest other player", () => {
+test("an angry throw curves back toward the nearest other player", () => {
   const run = (build: number) => {
     const sim = new Simulation(),
       thrower = sim.addPlayer(1),
@@ -1186,13 +1227,13 @@ test("angry balls accelerate toward the nearest other player", () => {
     sim.restore(thrower, { ...thrower.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
     thrower.state.build = build;
     sim.restore(victim, { ...victim.state, x: 3, y: 0.87, z: -3, vx: 0, vy: 0, vz: 0, out: 0 });
-    const ball = hold(sim, 1, "ball");
+    const can = hold(sim, 1, "trashcan");
     sim.step();
     assert.ok(sim.release(1, true), "the throw goes through");
     let minDist = Infinity;
     for (let i = 0; i < 240; i++) {
       sim.step();
-      const t = sim.props.get(ball)!.translation();
+      const t = sim.props.get(can)!.translation();
       minDist = Math.min(minDist, Math.hypot(t.x - victim.state.x, t.z - victim.state.z));
     }
     sim.dispose();
@@ -1203,45 +1244,49 @@ test("angry balls accelerate toward the nearest other player", () => {
   assert.ok(plain > 2.5, `a plain throw flies straight past (${plain})`);
   assert.ok(angry < 1.2, `the angry one homes in on the victim (${angry})`);
 });
-test("heavy junk makes thrown props hit dramatically harder", () => {
+test("heavy junk makes falling props bite dramatically harder", () => {
   const run = (build: number) => {
     const sim = new Simulation(),
       thrower = sim.addPlayer(1),
       victim = sim.addPlayer(2);
     sim.restore(thrower, { ...thrower.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
     thrower.state.build = build;
-    sim.restore(victim, { ...victim.state, x: 0, y: 0.87, z: -0.5, vx: 0, vy: 0, vz: 0, stagger: 0, out: 0 });
-    hold(sim, 1, "crate");
-    sim.step();
-    assert.ok(sim.release(1, true), "the throw goes through");
-    for (let i = 0; i < 240 && victim.state.stagger === 0; i++) sim.step();
+    sim.restore(victim, { ...victim.state, x: 0, y: 0.87, z: 0, vx: 0, vy: 0, vz: 0, stagger: 0, out: 0 });
+    const can = hold(sim, 1, "trashcan");
+    assert.ok(sim.release(1, false), "the drop goes through");
+    // A full-speed throw caps the HP drain either way, so let the can arrive at
+    // a speed both builds can express: the card multiplies the impact it lands.
+    const body = sim.props.get(can)!;
+    body.setTranslation({ x: 0, y: 5, z: 0 }, true);
+    body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    for (let i = 0; i < 150 && victim.state.hp === COMBAT.hpMax; i++) sim.step();
     const hp = victim.state.hp;
     sim.dispose();
     return hp;
   };
   const plain = run(0),
     heavy = run(cardBit("heavy-junk"));
-  assert.ok(plain < COMBAT.hpMax, "a hard crate hit hurts at all");
-  assert.ok(heavy < plain - 10, `heavy junk hurts more (${heavy} vs ${plain})`);
+  assert.ok(plain < COMBAT.hpMax, "a falling can hurts at all");
+  assert.ok(heavy < plain - 10, `heavy junk bites harder (${heavy} vs ${plain})`);
 });
 test("bounce junk makes props springy until someone picks them up", () => {
   const sim = new Simulation(),
     thrower = sim.addPlayer(1);
-  const crate = PROPS.findIndex((p) => p.kind === "crate") + 1;
-  sim.owners.set(crate, 1);
-  thrower.state.held = crate;
+  const can = PROPS.findIndex((p) => p.kind === "trashcan") + 1;
+  sim.owners.set(can, 1);
+  thrower.state.held = can;
   sim.restore(thrower, { ...thrower.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
   thrower.state.build = cardBit("bounce-junk");
   assert.ok(sim.release(1), "the drop goes through");
-  const col = sim.propColliders.get(crate)!;
-  assert.ok(Math.abs(col.restitution() - 0.92) < 1e-6, "the dropped crate is springy");
+  const col = sim.propColliders.get(can)!;
+  assert.ok(Math.abs(col.restitution() - 0.92) < 1e-6, "the dropped can is springy");
   // Pick it up again and the kind's base bounce comes back.
-  const body = sim.props.get(crate)!;
+  const body = sim.props.get(can)!;
   body.setTranslation({ x: 0, y: 1.52, z: 0.6 }, true);
   body.setLinvel({ x: 0, y: 0, z: 0 }, true);
   sim.step();
-  assert.ok(sim.pickup(1, crate), "the re-pick is accepted");
-  assert.ok(Math.abs(col.restitution() - 0.18) < 1e-6, "the crate bounces like a crate again");
+  assert.ok(sim.pickup(1, can), "the re-pick is accepted");
+  assert.ok(Math.abs(col.restitution() - 0.15) < 1e-6, "the can bounces like a trashcan again");
   sim.dispose();
 });
 test("dangerous junk turns hard prop hits into a small blast", () => {
@@ -1250,12 +1295,12 @@ test("dangerous junk turns hard prop hits into a small blast", () => {
       thrower = sim.addPlayer(1),
       victim = sim.addPlayer(2),
       bystander = sim.addPlayer(3);
-    const crate = PROPS.findIndex((p) => p.kind === "crate") + 1;
-    sim.owners.set(crate, 1);
-    thrower.state.held = crate;
+    const can = PROPS.findIndex((p) => p.kind === "trashcan") + 1;
+    sim.owners.set(can, 1);
+    thrower.state.held = can;
     sim.restore(thrower, { ...thrower.state, x: 0, y: 0.87, z: 2, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0 });
     thrower.state.build = build;
-    const body = sim.props.get(crate)!;
+    const body = sim.props.get(can)!;
     body.setTranslation({ x: 0, y: 0.87, z: 0.5 }, true);
     body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     sim.restore(victim, { ...victim.state, x: 0, y: 0.87, z: -0.5, vx: 0, vy: 0, vz: 0, stagger: 0, out: 0 });
@@ -1273,14 +1318,14 @@ test("dangerous junk turns hard prop hits into a small blast", () => {
 test("magnet glove drifts dropped props back to the thrower", () => {
   const sim = new Simulation(),
     thrower = sim.addPlayer(1);
-  const crate = PROPS.findIndex((p) => p.kind === "crate") + 1;
-  sim.owners.set(crate, 1);
-  thrower.state.held = crate;
+  const can = PROPS.findIndex((p) => p.kind === "trashcan") + 1;
+  sim.owners.set(can, 1);
+  thrower.state.held = can;
   sim.restore(thrower, { ...thrower.state, x: 0, y: 0.87, z: 2, vx: 0, vy: 0, vz: 0 });
   thrower.state.build = cardBit("magnet-glove");
   assert.ok(sim.release(1), "the drop goes through");
-  const body = sim.props.get(crate)!;
-  // Start the crate a few metres out so the drift has something to cover.
+  const body = sim.props.get(can)!;
+  // Start the can a few metres out so the drift has something to cover.
   body.setTranslation({ x: 3, y: 0.5, z: 2 }, true);
   body.setLinvel({ x: 0, y: 0, z: 0 }, true);
   let minDist = Infinity;
@@ -1289,6 +1334,6 @@ test("magnet glove drifts dropped props back to the thrower", () => {
     const t = body.translation();
     minDist = Math.min(minDist, Math.hypot(t.x - thrower.state.x, t.z - thrower.state.z));
   }
-  assert.ok(minDist < 1.5, `the crate drifts home (${minDist})`);
+  assert.ok(minDist < 1.5, `the can drifts home (${minDist})`);
   sim.dispose();
 });

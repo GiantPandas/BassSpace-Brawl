@@ -9,9 +9,10 @@ changes.
 
 A browser multiplayer starter: a shared building for 2–8 players — common room,
 hall, mezzanine, workshop, back room and an outdoor yard behind sliding doors —
-with physical props you can pick up and throw, bouncy balls, guns and bats that
-shove whoever they hit, a pickup horn, and proximity voice that sounds like it
-comes from the other player's mouth. This repository is now **BassSpace Brawl**
+with physical props you can pick up and throw, six shove guns and a horn that
+shove whoever they hit, bare-knuckle punches when your hands are empty, a pickup
+horn, and proximity voice that sounds like it comes from the other player's
+mouth. This repository is now **BassSpace Brawl**
 (see `BassSPace Brawl Design Doc.txt`): the starter's no-health/no-death rule
 has been retired — this layer now owns HP, out-of-bounds elimination, rounds and
 upgrade cards. There are still no accounts.
@@ -40,8 +41,8 @@ src/
   shared/                     Runs on BOTH client and server. No DOM, no three, no Node APIs.
     level.ts                  LEVEL boxes (render + collision), DOORS (sliding leaves),
                               WINDOWS (breakable panes) + WINDOW break speed,
-                              SPAWNS, PROPS (six guns/bat/horn/ball/crate/chair/
-                              table/trashcan/bottle/bucket) + propKind + GUNS
+                              SPAWNS, PROPS (six guns/horn/chair/table/
+                              trashcan/bottle) + propKind + GUNS
                               (per-gun tuning incl. `reloads`) + AIR (sky drops),
                               PALETTE,
                               STEP = 1/60, MAX_PLAYERS = 8, WEAPON tuning,
@@ -61,8 +62,8 @@ src/
     simulation.ts             Rapier world + character motor. THE authority boundary.
                               addPlayer/removePlayer, motor(), step(), restore(), target(),
                               pickup(), release(), shoot(), reload(), respawn(), swing(), honk(),
-                              reach(), doorTarget(), toggleDoor(), setDoor(), doorStates(),
-                              syncDoors(), propStates(), syncProps(), supply(),
+                              punchReach(), reach(), doorTarget(), toggleDoor(), setDoor(),
+                              doorStates(), syncDoors(), propStates(), syncProps(), supply(),
                               spawnDrop(), removeDrop(), eye(), dispose()
   net/                        Isomorphic transport layer. No three, no DOM, no node:*.
     channel.ts                Channel interface (send/close/onmessage/onclose, backpressure),

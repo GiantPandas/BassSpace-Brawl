@@ -8,21 +8,17 @@ export type Box = {
   hide?: boolean;
 };
 export type PropKind =
-  | "crate"
-  | "ball"
   | "gun"
   | "smg"
   | "shotgun"
   | "rifle"
   | "launcher"
   | "seeker"
-  | "bat"
   | "horn"
   | "chair"
   | "table"
   | "trashcan"
-  | "bottle"
-  | "bucket";
+  | "bottle";
 export type Prop = { p: [number, number, number]; kind: PropKind };
 /** A sliding leaf. Closed at `p`, open at `p + slide`; ids are their own namespace. */
 export type Door = {
@@ -85,9 +81,9 @@ export const SPAWNS = [
 ];
 
 export const PROPS: Prop[] = [
-  { p: [-2, 0.5, -2], kind: "crate" },
-  { p: [2, 0.5, 3], kind: "crate" },
-  { p: [10, 0.5, 1], kind: "crate" },
+  { p: [-2, 0.5, -2], kind: "trashcan" },
+  { p: [2, 0.5, 3], kind: "bottle" },
+  { p: [10, 0.5, 1], kind: "trashcan" },
   { p: [-4, 0.5, -2], kind: "gun" },
   { p: [1, 0.5, -10], kind: "gun" },
   { p: [2.5, 0.5, -2.5], kind: "smg" },
@@ -95,16 +91,15 @@ export const PROPS: Prop[] = [
   { p: [8, 0.5, 1.8], kind: "rifle" },
   { p: [-9, 0.5, -1.6], kind: "launcher" },
   { p: [0, 0.5, 8.5], kind: "seeker" },
-  { p: [0, 0.5, -4], kind: "bat" },
   { p: [-3, 0.5, 4], kind: "horn" },
-  { p: [-7.8, 0.5, 1.4], kind: "ball" },
-  { p: [6.8, 2.5, 6.8], kind: "ball" },
+  { p: [-7.8, 0.5, 1.4], kind: "bottle" },
+  { p: [6.8, 2.5, 6.8], kind: "bottle" },
   { p: [1, 0.5, 10], kind: "chair" },
   { p: [3, 0.5, -4], kind: "table" },
   { p: [-1, 0.5, 3], kind: "trashcan" },
   { p: [-4, 0.5, -4], kind: "bottle" },
-  { p: [4.5, 0.5, -4], kind: "bucket" },
-  { p: [1.2, 0.5, -1.2], kind: "crate" },
+  { p: [4.5, 0.5, -4], kind: "trashcan" },
+  { p: [1.2, 0.5, -1.2], kind: "bottle" },
   { p: [-10.2, 0.5, -1], kind: "gun" },
 ];
 export const PROP_STARTS = PROPS.map((p) => p.p);
@@ -474,16 +469,20 @@ export const AIR = {
   /** The rotation drops cycle through, so a round sees every gun. */
   kinds: ["smg", "shotgun", "rifle", "gun", "seeker", "launcher"] as GunKind[],
 };
-/** Short-range, authority-owned shove from a baseball bat. */
-export const MELEE = {
-  range: 2.35,
-  radius: 0.48,
-  cooldown: 34,
-  knock: 11.5,
-  lift: 4.2,
-  recoil: 0.35,
-  stagger: 30,
+/** Bare-handed shove — the only melee there is, for anyone unarmed. */
+export const FIST = {
+  range: 1.95,
+  radius: 0.44,
+  cooldown: 38,
+  knock: 9.5,
+  lift: 3.6,
+  recoil: 0.3,
+  stagger: 26,
+  /** A punch's relative-speed equivalent: how deep a wound it opens. */
+  impact: 12,
 };
+/** How hard a throw leaves the hand: launch speed, a little lift, some spin. */
+export const THROW = { speed: 17, lift: 2.6, spin: 3 };
 /** A horn is harmless, but the authority still rate-limits the noise. */
 export const HORN = { cooldown: 42 };
 /** DOOR SLAMMER: a moving leaf launches the players it sweeps over. */
