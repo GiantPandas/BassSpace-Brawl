@@ -309,6 +309,10 @@ test("Chrome pointer lock, Blender character, pickup, throw and crouch", async (
   await page.screenshot({ path: "test-results/holding.png" });
   await page.evaluate(() => (window as any).__friendslop.action(true));
   await expect.poll(async () => (await state(page)).held).toBe(0);
+  // Crouch somewhere nothing hangs overhead. A player wedged under a table
+  // cannot stand, and every room code scatters its furniture differently, so
+  // the open centre slab is the one spot this assertion can rely on.
+  await walkTo(page, 0, 0);
   await page.evaluate(() => (window as any).__friendslop.input("KeyC", true));
   await expect.poll(async () => (await state(page)).flags & 2).toBe(2);
   await page.evaluate(() => (window as any).__friendslop.input("KeyC", false));

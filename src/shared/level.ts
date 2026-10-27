@@ -469,7 +469,7 @@ export const AIR = {
   /** The rotation drops cycle through, so a round sees every gun. */
   kinds: ["smg", "shotgun", "rifle", "gun", "seeker", "launcher"] as GunKind[],
 };
-/** Bare-handed shove — the only melee there is, for anyone unarmed. */
+/** Bare-handed shove — the base numbers the melee cards scale. */
 export const FIST = {
   range: 1.95,
   radius: 0.44,
@@ -481,6 +481,8 @@ export const FIST = {
   /** A punch's relative-speed equivalent: how deep a wound it opens. */
   impact: 12,
 };
+/** HAMMER HANDS: a landed punch also bellows outward, mostly as a shove. */
+export const MELEE_BOOM = { radius: 2.4, force: 6, lift: 2.5, damage: 2 };
 /** How hard a throw leaves the hand: launch speed, a little lift, some spin. */
 export const THROW = { speed: 17, lift: 2.6, spin: 3 };
 /** A horn is harmless, but the authority still rate-limits the noise. */

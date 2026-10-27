@@ -598,6 +598,101 @@ test("yeet multiplies the knockback of every hit", () => {
   assert.ok(Math.abs(swingAt(cardBit("yeet"))) > Math.abs(free) * 1.45, "yeet hits harder");
   sim.dispose();
 });
+test("melee cards reshape the punch", () => {
+  const sim = new Simulation(),
+    hitter = sim.addPlayer(1),
+    victim = sim.addPlayer(2),
+    bystander = sim.addPlayer(3);
+  const punch = (build: number, gap: number, at = { x: 0.35, z: 0.15 }) => {
+    hitter.state.build = build;
+    sim.restore(hitter, {
+      ...hitter.state,
+      x: 0,
+      y: 0.87,
+      z: 2,
+      yaw: 0,
+      pitch: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      held: 0,
+      stagger: 0,
+      out: 0,
+    });
+    sim.restore(victim, {
+      ...victim.state,
+      x: at.x,
+      y: 0.87,
+      z: at.z,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      hp: COMBAT.hpMax,
+      stagger: 0,
+      out: 0,
+    });
+    sim.restore(bystander, {
+      ...bystander.state,
+      x: 1.2,
+      y: 0.87,
+      z: 1.4,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      hp: COMBAT.hpMax,
+      stagger: 0,
+      out: 0,
+    });
+    for (let i = 0; i < gap; i++) sim.step();
+    const hp = victim.state.hp,
+      booms = sim.explosionEvents.length;
+    const swing = sim.swing(1);
+    return {
+      hit: swing?.hit ?? 0,
+      vz: victim.state.vz,
+      vy: victim.state.vy,
+      lost: hp - victim.state.hp,
+      booms: sim.explosionEvents.length - booms,
+      bystander: Math.hypot(bystander.state.vx, bystander.state.vz),
+    };
+  };
+  const cool = FIST.cooldown + 5;
+  const plain = punch(0, cool);
+  assert.equal(plain.hit, 2, "a plain punch lands");
+  assert.equal(plain.booms, 0, "and bellows nothing");
+  const iron = punch(cardBit("iron-fist"), cool);
+  assert.ok(Math.abs(iron.vz) > Math.abs(plain.vz) * 1.45, "iron fist shoves half again as far");
+  assert.ok(iron.lost > plain.lost, "and wounds deeper");
+  const rising = punch(cardBit("rising-cut"), cool);
+  assert.ok(rising.vy > plain.vy * 1.6, "a rising cut throws the target upward");
+  // LONG REACH is about the lane's length. A plain fist reaches 1.95 + its own
+  // 0.44 ball + the victim's 0.3 capsule, so 3 m ahead is out of it and easily
+  // inside the long one (2.73 + 0.62 + 0.3).
+  assert.equal(punch(0, cool, { x: 0, z: -1 }).hit, 0, "a plain fist falls short");
+  assert.equal(punch(cardBit("long-reach"), cool, { x: 0, z: -1 }).hit, 2, "long reach catches them");
+  // RAPID JAB shortens the recovery the punch itself sets: land one with a
+  // build, then count the ticks until the next one is accepted.
+  const recoverOf = (build: number) => {
+    punch(build, cool);
+    hitter.state.build = build;
+    let ticks = 0;
+    while (ticks < FIST.cooldown + 12 && sim.swing(1) === null) {
+      sim.step();
+      ticks++;
+    }
+    return ticks;
+  };
+  assert.equal(recoverOf(0), FIST.cooldown, "a plain punch waits the full recovery");
+  assert.equal(
+    recoverOf(cardBit("rapid-jab")),
+    Math.round(FIST.cooldown * 0.5),
+    "rapid jab is swinging again at half the wait",
+  );
+  const hammer = punch(cardBit("hammer-hands"), cool);
+  assert.equal(hammer.booms, 1, "a hammer punch bellows outward");
+  assert.ok(hammer.bystander > 1, "and a bystander catches the edge of it");
+  sim.dispose();
+});
 test("rocket legs launch the player who jumps next to you", () => {
   const sim = new Simulation(),
     a = sim.addPlayer(1),

@@ -8,6 +8,7 @@ import {
   GUNS,
   HORN,
   IMPACT,
+  MELEE_BOOM,
   STEP,
   THROW,
   TINY_ARENA,
@@ -877,7 +878,9 @@ export class Simulation {
   /**
    * Swing a bare fist — or whatever junk is in the hand — through a forgiving
    * capsule-sized lane in front. A gun or a horn owns the mouse button, so the
-   * punch refuses while you are armed; unarmed is the whole point of it.
+   * punch refuses while you are armed; unarmed is the whole point of it. The
+   * melee cards scale these numbers from the player's replicated build, so a
+   * client's prediction swings exactly like the authority does.
    */
   swing(playerId: number): Swing | null {
     const c = this.players.get(playerId);
@@ -885,9 +888,14 @@ export class Simulation {
     const kind = this.kind(c.state.held);
     if (isGun(kind) || kind === "horn") return null;
     if (this.frame < (this.meleeCooldowns.get(playerId) ?? 0)) return null;
-    this.meleeCooldowns.set(playerId, this.frame + FIST.cooldown);
+    const st = buildStats(c.state.build);
+    this.meleeCooldowns.set(
+      playerId,
+      this.frame + Math.round(FIST.cooldown * st.meleeCooldown),
+    );
     const s = c.state,
       d = this.direction(s),
+      reach = FIST.range * st.meleeReach,
       targets = new Map(
         [...this.players].map(([id, p]) => [p.collider.handle, id]),
       ),
@@ -896,9 +904,9 @@ export class Simulation {
       this.eye(s),
       { x: 0, y: 0, z: 0, w: 1 },
       d,
-      new RAPIER.Ball(FIST.radius),
+      new RAPIER.Ball(FIST.radius * st.meleeReach),
       0.01,
-      FIST.range,
+      reach,
       true,
       undefined,
       undefined,
@@ -910,15 +918,25 @@ export class Simulation {
     );
     const victim = hit ? (targets.get(hit.collider.handle) ?? 0) : 0,
       struck = this.players.get(victim),
-      mult = buildStats(s.build).knockMult;
+      mult = st.knockMult;
     if (struck) {
       // The victim's own wound decides how far they fly.
-      const hurt = mult * this.knockScale(struck.state.hp);
+      const hurt = mult * st.meleeKnock * this.knockScale(struck.state.hp);
       struck.state.vx += d.x * FIST.knock * hurt;
       struck.state.vz += d.z * FIST.knock * hurt;
-      struck.state.vy = Math.max(struck.state.vy, 0) + FIST.lift * hurt;
+      struck.state.vy = Math.max(struck.state.vy, 0) + FIST.lift * st.meleeLift * hurt;
       struck.state.stagger = FIST.stagger;
-      this.hurt(struck.state, FIST.impact);
+      this.hurt(struck.state, FIST.impact * st.meleeImpact);
+      // HAMMER HANDS: the fist bellows like a shell, so anyone beside the
+      // victim — the puncher included — catches the edge of it.
+      if (st.hammerHands)
+        this.boomAt(
+          { x: struck.state.x, y: struck.state.y, z: struck.state.z },
+          MELEE_BOOM.radius,
+          MELEE_BOOM.force,
+          MELEE_BOOM.lift,
+          MELEE_BOOM.damage,
+        );
     }
     s.vx -= d.x * FIST.recoil;
     s.vz -= d.z * FIST.recoil;

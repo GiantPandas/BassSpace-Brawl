@@ -173,8 +173,12 @@ so it is refused while a gun or the horn owns the mouse. It uses an
 authority-owned swept sphere over the short `FIST.range`; a struck player gets
 the same kind of shove and stagger as a gun hit. `{type:"swing", id, object,
 hit}` drives the visible swing and impact effects, and `object` is `0` for a
-punch. `honk` requires a held horn and is authority-rate-limited by
-`HORN.cooldown`; accepted uses are broadcast as spatial `sound` events.
+punch. The melee cards scale those numbers from the replicated `build` — shove,
+wound, recovery, lane size and launch — so a client's prediction swings with
+identical values; HAMMER HANDS routes through the same radial blast an explosive
+pellet uses (`MELEE_BOOM`), announced once as an `explosion`. `honk` requires a
+held horn and is authority-rate-limited by `HORN.cooldown`; accepted uses are
+broadcast as spatial `sound` events.
 
 `door` toggles one hand-worked leaf and is accepted only when that leaf is under
 the player's crosshair. Automatic leaves open for anyone within `AUTO_RANGE`,

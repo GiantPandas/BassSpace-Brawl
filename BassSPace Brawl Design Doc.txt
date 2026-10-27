@@ -293,6 +293,28 @@ ROCKET LEGS
 
 Jumping creates a downward shockwave.
 
+Melee Upgrades
+
+IRON FIST
+
+Punches shove half again as far and wound deeper.
+
+RAPID JAB
+
+Punches recover in half the time.
+
+LONG REACH
+
+The punch lane is longer and wider.
+
+RISING CUT
+
+Punches throw their target upward.
+
+HAMMER HANDS
+
+A punch that lands creates a small physics impulse.
+
 8. Weird Build Synergies
 
 The upgrade system should deliberately create ridiculous combinations.

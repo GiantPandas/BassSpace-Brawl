@@ -4,7 +4,7 @@
  */
 import { WEAPON } from "./level.js";
 
-export type CardCategory = "projectile" | "knockback" | "movement" | "junk";
+export type CardCategory = "projectile" | "knockback" | "movement" | "junk" | "melee";
 
 export type Card = {
   id: string;
@@ -169,6 +169,38 @@ export const CARDS: Card[] = [
     blurb: "Projectiles bounce twice before disappearing.",
     category: "projectile",
   },
+  // Melee (design doc §8's unarmed lane): the punch is the fallback verb, so it
+  // gets a build of its own. Everything here scales `FIST` inside swing().
+  {
+    id: "iron-fist",
+    name: "IRON FIST",
+    blurb: "Your punches shove half again as far and wound deeper.",
+    category: "melee",
+  },
+  {
+    id: "rapid-jab",
+    name: "RAPID JAB",
+    blurb: "Your punches recover in half the time.",
+    category: "melee",
+  },
+  {
+    id: "long-reach",
+    name: "LONG REACH",
+    blurb: "Your punch lane is longer and wider.",
+    category: "melee",
+  },
+  {
+    id: "rising-cut",
+    name: "RISING CUT",
+    blurb: "Punches throw their target upward instead of sideways.",
+    category: "melee",
+  },
+  {
+    id: "hammer-hands",
+    name: "HAMMER HANDS",
+    blurb: "A punch that lands creates a small physics impulse.",
+    category: "melee",
+  },
 ];
 
 /** Cards whose effects the simulation actually applies (Phases 2–3). */
@@ -200,6 +232,12 @@ export const IMPLEMENTED_CARDS = new Set([
   "bounce-junk",
   "dangerous-junk",
   "magnet-glove",
+  // Melee: punch-only, all scaled inside `Simulation.swing()`.
+  "iron-fist",
+  "rapid-jab",
+  "long-reach",
+  "rising-cut",
+  "hammer-hands",
 ]);
 
 const CARD_BITS = new Map(CARDS.map((c) => [c.id, 1 << CARDS.indexOf(c)]));
@@ -240,6 +278,18 @@ export type BuildStats = {
   bounceJunk: boolean;
   dangerousJunk: boolean;
   magnetGlove: boolean;
+  /** Punch shove, on top of YEET/MEGA YEET (IRON FIST). */
+  meleeKnock: number;
+  /** Punch wound, on top of the knockback cards (IRON FIST). */
+  meleeImpact: number;
+  /** Punch recovery multiplier — RAPID JAB swings again sooner. */
+  meleeCooldown: number;
+  /** Punch lane length and width together (LONG REACH). */
+  meleeReach: number;
+  /** Vertical launch on a landed punch (RISING CUT). */
+  meleeLift: number;
+  /** HAMMER HANDS: a punch that lands bellows outward. */
+  hammerHands: boolean;
 };
 
 /** Resolve a u32 build bitmask into the numbers the simulation applies. */
@@ -275,5 +325,11 @@ export function buildStats(build: number): BuildStats {
     bounceJunk: has("bounce-junk"),
     dangerousJunk: has("dangerous-junk"),
     magnetGlove: has("magnet-glove"),
+    meleeKnock: has("iron-fist") ? 1.5 : 1,
+    meleeImpact: has("iron-fist") ? 1.4 : 1,
+    meleeCooldown: has("rapid-jab") ? 0.5 : 1,
+    meleeReach: has("long-reach") ? 1.4 : 1,
+    meleeLift: has("rising-cut") ? 2.2 : 1,
+    hammerHands: has("hammer-hands"),
   };
 }
