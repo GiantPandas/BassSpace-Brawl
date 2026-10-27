@@ -347,9 +347,11 @@ you are in.
 ## 7. Avatar bone contract (read before touching `scene.ts` or the Blender script)
 
 Rig: `hips → spine → head → jaw`, `spine → armL/armR`, `hips → legL/legR`.
-Rigid weights, one bone per vertex. The head is a sphere bisected at the mouth
-line: `Jawbowl` (lower, on `head`) and `Cranium` (upper, on `jaw`, hinged at the
-back of the skull so it lifts like a lid). Cap and eyes ride `jaw`.
+Rigid weights, one bone per vertex. The head is a rounded cube bisected at
+`z 1.46` (`JAW_LINE`): `Jawbowl` below rides `head`, `Cranium` above rides
+`jaw`, and the eyes, brow, nose and ears ride `jaw` too, so opening the mouth
+lifts the upper face like a lid about a hinge near the back-top of the skull.
+There is no mouth geometry.
 
 Coordinate facts: Blender is Z-up and the model faces −Y; glTF/three is Y-up and
 the model faces +Z. The avatar root gets `rotation.y = yaw + π`, sits at
@@ -360,14 +362,15 @@ Rules the code depends on:
 
 - **Bone names contain no `.`.** The glTF exporter strips dots (`arm.L` became
   `armL`), which silently broke `getObjectByName("arm.L")` for a long time.
-- **The head is bare; hats are runtime cosmetics.** The GLB ships a bare sphere
-  head (`0.66` cube, dome top `z 1.97`) with no headwear — crown pieces are gone,
-  and there is no mouth geometry: a strip laid on the sphere read as a line
-  floating over the face. `Socket_Hat`, an empty parented to the `head` bone on the
-  dome at `(0,-.02,1.965)`, is exported in the GLB; `scene.ts` parents every hat
-  group to it (`getObjectByName("Socket_Hat")`), so hats ride the head. Hat bases
-  are authored 0.05–0.10 below the socket origin. The head half `Cranium` rides the
-  `jaw` bone, so the head tilt carries the face; eyes and nose follow.
+- **The head is bare; hats are runtime cosmetics.** The GLB ships a bare head
+  (`0.66 × 0.64 × 0.68` rounded cube centred `(0,-.02,1.63)`, dome top `z 1.97`)
+  with no headwear — crown pieces are gone, and there is no mouth geometry: a
+  strip laid on the head read as a line floating over the face. `Socket_Hat`, an
+  empty parented to the `head` bone on the dome at `(0,-.02,1.965)`, is exported
+  in the GLB; `scene.ts` parents every hat group to it
+  (`getObjectByName("Socket_Hat")`), so hats ride the head. Hat bases are
+  authored 0.05–0.10 below the socket origin. The cap dome above `z 1.72` rides
+  the `jaw` bone, so the head tilt carries the face; eyes and nose follow.
 - **`head` and `jaw` are never keyframed** in the Blender actions. The exporter
   still bakes constant tracks for them, which is why the next rule exists.
 - **Never assign `bone.rotation.x` to aim a bone.** The rest quaternions are not
