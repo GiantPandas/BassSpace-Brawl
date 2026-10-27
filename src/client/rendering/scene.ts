@@ -76,8 +76,71 @@ const HOLD_LIFT = -1.1;
 const THIRD_PERSON_DISTANCE = 4.2;
 const THIRD_PERSON_PADDING = 0.18;
 const HINGE_AXIS = new THREE.Vector3(1, 0, 0);
-const LOBBY_SKY = new THREE.Color("#f0f4ee");
-const GAME_SKY = new THREE.Color("#b9d9e8");
+/**
+ * The void the arena floats in, drawn as an equirectangular dome: a gradient, a
+ * lit horizon with a glow at one bearing, drifting cloud banks and sparse stars.
+ * The match palette is deliberately deep — a pellet against the old pale sky was
+ * nearly invisible, and against this it is the brightest thing on screen.
+ */
+const SKY = {
+  lobby: { high: "#2a3740", band: "#4e5e66", low: "#1b2227", glow: "#7f968c", stars: 90, seed: 7 },
+  game: { high: "#070c12", band: "#16232c", low: "#060a0e", glow: "#1e4438", stars: 240, seed: 23 },
+};
+/** Fog takes each dome's horizon tone so distant geometry melts into it, not into a flat wash. */
+const LOBBY_SKY = new THREE.Color("#3b4a52");
+const GAME_SKY = new THREE.Color("#131f27");
+/** One sky as a canvas: 1024×512 equirectangular, v=0.5 being the horizon. */
+function skyTexture(s: (typeof SKY)["lobby"]) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 512;
+  const c = canvas.getContext("2d")!;
+  const gradient = c.createLinearGradient(0, 0, 0, 512);
+  gradient.addColorStop(0, s.high);
+  gradient.addColorStop(0.47, s.band);
+  gradient.addColorStop(0.53, s.band);
+  gradient.addColorStop(1, s.low);
+  c.fillStyle = gradient;
+  c.fillRect(0, 0, 1024, 512);
+  // The glow: brightest at one bearing, so the arena has a side it faces.
+  const halo = c.createRadialGradient(300, 256, 0, 300, 256, 430);
+  halo.addColorStop(0, s.glow);
+  halo.addColorStop(1, "rgba(0,0,0,0)");
+  c.globalAlpha = 0.34;
+  c.fillStyle = halo;
+  c.fillRect(0, 0, 1024, 512);
+  let seed = s.seed;
+  const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  // Cloud banks: thin, low-contrast bands, kept narrow so they read as weather
+  // rather than as blobs smeared across the sky.
+  for (let i = 0; i < 12; i++) {
+    c.globalAlpha = 0.04 + rand() * 0.06;
+    c.fillStyle = rand() > 0.5 ? "#e8eef2" : "#0d1319";
+    c.beginPath();
+    c.ellipse(
+      rand() * 1024,
+      256 + (rand() - 0.5) * 210,
+      70 + rand() * 130,
+      5 + rand() * 9,
+      0,
+      0,
+      Math.PI * 2,
+    );
+    c.fill();
+  }
+  // Stars above the band only.
+  for (let i = 0; i < s.stars; i++) {
+    c.globalAlpha = 0.3 + rand() * 0.65;
+    c.fillStyle = "#dfe9f2";
+    const size = 0.7 + rand() * 1.6;
+    c.fillRect(rand() * 1024, rand() * 232, size, size);
+  }
+  c.globalAlpha = 1;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  return texture;
+}
 const spin = new THREE.Quaternion();
 function driven(character: THREE.Object3D, name: string): Driven | undefined {
   const bone = character.getObjectByName(name);
@@ -148,10 +211,15 @@ export class GameScene {
   kingId = 0;
   /** Live pellet meshes (ids ≥ PELLET_ID_BASE); they share one geometry and material. */
   pellets = new Map<number, THREE.Mesh>();
+  /** Where each pellet was last frame, so it can be stretched along its travel. */
+  private pelletTrail = new Map<number, { x: number; y: number; z: number }>();
   private pelletGeo = new THREE.SphereGeometry(0.09, 8, 6);
   private pelletMat = new THREE.MeshBasicMaterial({ color: "#ffcf8a", toneMapped: false });
   asset?: GLTF;
   playing = false;
+  /** The two domes: a dusk sky behind the lobby, a deep one behind the match. */
+  private lobbySky = skyTexture(SKY.lobby);
+  private gameSky = skyTexture(SKY.game);
   front: THREE.Object3D[] = [];
   highlight = 0;
   /** The layout currently rendered; the join flow swaps in the room's arena. */
@@ -182,7 +250,7 @@ export class GameScene {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.setClearColor(LOBBY_SKY);
+    this.scene.background = this.lobbySky;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.2;
@@ -191,7 +259,9 @@ export class GameScene {
     this.labels.className = "world-labels";
     container.append(this.labels);
     this.scene.fog = new THREE.Fog(LOBBY_SKY, 35, 90);
-    this.scene.add(new THREE.HemisphereLight("#f6eedb", "#728078", 2.3));
+    // The dome lights the arena cool and the deck bounces almost nothing back;
+    // the sun stays the key, so shadows read against a dark sky.
+    this.scene.add(new THREE.HemisphereLight("#cfd9e2", "#2b3436", 1.35));
     const sun = new THREE.DirectionalLight("#fff1c8", 3.2);
     sun.position.set(-3, 19, -13);
     sun.target.position.set(6, 0, -8);
@@ -204,6 +274,10 @@ export class GameScene {
     sun.shadow.camera.bottom = -32;
     sun.shadow.normalBias = 0.03;
     this.scene.add(sun, sun.target);
+    // A cool rim from the glow bearing: a silhouette must never merge into the dome.
+    const rim = new THREE.DirectionalLight("#7fb6a6", 0.7);
+    rim.position.set(9, 7, 15);
+    this.scene.add(rim);
     this.renderArena();
     this.loaded = new GLTFLoader()
       .loadAsync(new URL("models/yellow_visor_mascot.glb", document.baseURI).href)
@@ -1361,10 +1435,10 @@ export class GameScene {
     this.playing = playing;
     for (const m of this.front) m.visible = playing;
     for (const p of this.preview) p.visible = !playing;
-    const sky = playing ? GAME_SKY : LOBBY_SKY;
-    this.renderer.setClearColor(sky);
+    const fog = playing ? GAME_SKY : LOBBY_SKY;
+    this.scene.background = playing ? this.gameSky : this.lobbySky;
     if (this.scene.fog instanceof THREE.Fog) {
-      this.scene.fog.color.copy(sky);
+      this.scene.fog.color.copy(fog);
       this.scene.fog.near = playing ? 48 : 35;
       this.scene.fog.far = playing ? 110 : 90;
     }
@@ -1629,8 +1703,22 @@ export class GameScene {
           this.pellets.set(p.id, m);
         }
         const big = !!((builds?.get(p.owner) ?? 0) & cardBit("big-ball"));
-        m.scale.setScalar(big ? 0.3 / 0.09 : 1);
+        const size = big ? 0.3 / 0.09 : 1;
         m.position.set(p.x, p.y, p.z);
+        // A round is a 9 cm sphere: unreadable against a dark sky at range.
+        // Stretch it along the way it came so it reads as a tracer, not a dot.
+        const was = this.pelletTrail.get(p.id);
+        if (was) {
+          const dx = p.x - was.x,
+            dy = p.y - was.y,
+            dz = p.z - was.z;
+          const len = Math.hypot(dx, dy, dz);
+          if (len > 1e-4) {
+            m.scale.set(0.7 * size, 0.7 * size, THREE.MathUtils.clamp(len * 7, 1, 6) * size);
+            m.lookAt(m.position.x + dx, m.position.y + dy, m.position.z + dz);
+          } else m.scale.setScalar(size);
+        } else m.scale.setScalar(size);
+        this.pelletTrail.set(p.id, { x: p.x, y: p.y, z: p.z });
         seen.add(p.id);
         continue;
       }
@@ -1650,6 +1738,7 @@ export class GameScene {
       if (!seen.has(id)) {
         this.scene.remove(m);
         this.pellets.delete(id);
+        this.pelletTrail.delete(id);
       }
     }
   }
@@ -1673,6 +1762,8 @@ export class GameScene {
   }
   render(dt: number) {
     this.clock += dt;
+    // The dome drifts almost imperceptibly; the cloud banks are what you notice.
+    if (!this.calm) this.scene.backgroundRotation.y += dt * 0.008;
     for (let i = this.effects.length - 1; i >= 0; i--) {
       const e = this.effects[i];
       e.life += dt;
