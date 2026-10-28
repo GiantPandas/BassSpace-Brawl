@@ -291,6 +291,61 @@ test("a gun fires a live pellet that shoves and damages on contact", () => {
   assert.ok(sim.shoot(1), "the gun is ready again");
   sim.dispose();
 });
+test("a round that keeps bouncing pays a person once and does not tow them", () => {
+  const sim = new Simulation(),
+    shooter = sim.addPlayer(1),
+    victim = sim.addPlayer(2);
+  const gun = PROPS.findIndex((p) => p.kind === "gun") + 1;
+  // Both of them on the centre slab: a shove this strong walks an edge-standing
+  // player out of the arena, and that drain is not what this test is about.
+  sim.props.get(gun)!.setTranslation({ x: 0, y: 0.5, z: 2 }, true);
+  for (let i = 0; i < 60; i++) sim.step();
+  const rest = sim.props.get(gun)!.translation();
+  sim.restore(shooter, {
+    ...shooter.state,
+    x: rest.x,
+    y: 0.87,
+    z: rest.z + 1.5,
+    yaw: 0,
+    pitch: Math.atan2(0.87 + 0.65 - rest.y, 1.5),
+  });
+  sim.restore(victim, { ...victim.state, x: rest.x, y: 0.87, z: rest.z - 3 });
+  sim.step();
+  assert.equal(sim.pickup(1, gun), true);
+  sim.restore(shooter, { ...shooter.state, pitch: 0, held: gun });
+  sim.step();
+  sim.setEnv("bounce"); // rounds survive contact, so this is the towing case
+  const shot = sim.shoot(1);
+  assert.ok(shot && shot.pellet !== undefined, "the shot spawns a round that will survive");
+  const still = { seq: 0, x: 0, z: 0, yaw: 0, pitch: 0, buttons: 0 };
+  let damageSteps = 0,
+    staggerStarts = 0,
+    hp = victim.state.hp,
+    staggered = victim.state.stagger > 0;
+  for (let i = 0; i < 240; i++) {
+    sim.motor(shooter, { ...still, seq: i + 1 });
+    sim.motor(victim, { ...still, seq: i + 1 });
+    sim.step();
+    if (victim.state.hp < hp) damageSteps++;
+    if (victim.state.stagger > 0 && !staggered) staggerStarts++;
+    hp = victim.state.hp;
+    staggered = victim.state.stagger > 0;
+  }
+  assert.equal(damageSteps, 1, "one round drains health once, however many contacts it reports");
+  assert.ok(staggerStarts <= 1, "and loses footing once");
+  const anchor = { x: victim.state.x, z: victim.state.z };
+  for (let i = 0; i < 90; i++) {
+    sim.motor(shooter, { ...still, seq: i + 1 });
+    sim.motor(victim, { ...still, seq: i + 1 });
+    sim.step();
+  }
+  assert.ok(
+    Math.hypot(victim.state.x - anchor.x, victim.state.z - anchor.z) < 0.5,
+    "nothing keeps dragging them along once the shove has settled",
+  );
+  assert.ok(sim.players.has(2), "the victim is still in the round");
+  sim.dispose();
+});
 test("ammo runs dry, the reload refills it, and R starts it early", () => {
   const sim = new Simulation(),
     shooter = sim.addPlayer(1);

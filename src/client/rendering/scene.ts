@@ -56,6 +56,11 @@ const FALLBACK_LOOK = LOOKS.gun;
  *  round at wall clock instead puts it ahead of the truth it is about to be
  *  corrected to, and that rubber-band is what reads as judder. */
 const PELLET_LAG = 0.1;
+/** Ceiling on the acceleration a round is drawn with. Gravity (≈9.8), a launcher
+ *  arc and a seeker's bend all sit far under it; a reconciliation spike divided
+ *  by a frame interval shoots way past it, and that is what made a round appear
+ *  to fly back where it came from. */
+const ACCEL_CAP = 60;
 /** All authored nose-first along +Z, which is what `lookAt` points at the sky. */
 function makePelletGeos(): Record<Look["shape"], THREE.BufferGeometry> {
   return {
@@ -1929,16 +1934,21 @@ export class GameScene {
           ax = was?.ax ?? 0,
           ay = was?.ay ?? 0,
           az = was?.az ?? 0;
-        if (was && dt > 0.005) {
+        // Two coordinates a frame apart are 16 ms apart; dividing a difference by
+        // that turns one correction into thousands of m/s² and the round then
+        // flies metres away from where it was. Derive acceleration only from a
+        // real gap between reports, and cap it: gravity, an arc and a seeker's
+        // bend are all well under this, a reconciliation spike is not.
+        if (was && dt > 0.025) {
           const nx = (p.x - was.x) / dt,
             ny = (p.y - was.y) / dt,
             nz = (p.z - was.z) / dt;
           // Acceleration keeps the launcher's arc and a seeker's bend flying
           // through the gap between snapshots; blended so one bounce cannot
           // spike it into a wild streak.
-          ax = was.ax * 0.35 + ((nx - was.vx) / dt) * 0.65;
-          ay = was.ay * 0.35 + ((ny - was.vy) / dt) * 0.65;
-          az = was.az * 0.35 + ((nz - was.vz) / dt) * 0.65;
+          ax = Math.max(-ACCEL_CAP, Math.min(ACCEL_CAP, was.ax * 0.35 + ((nx - was.vx) / dt) * 0.65));
+          ay = Math.max(-ACCEL_CAP, Math.min(ACCEL_CAP, was.ay * 0.35 + ((ny - was.vy) / dt) * 0.65));
+          az = Math.max(-ACCEL_CAP, Math.min(ACCEL_CAP, was.az * 0.35 + ((nz - was.vz) / dt) * 0.65));
           vx = nx;
           vy = ny;
           vz = nz;

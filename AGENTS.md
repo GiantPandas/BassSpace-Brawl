@@ -183,7 +183,11 @@ knock/lift to the victim's velocity plus its `stagger` ticks of lost
 footing (a networked `PlayerState` field so the client's replay agrees), and
 drains health proportional to the pellet's pre-bounce speed, scaled by the gun
 and capped at
-`COMBAT.maxPerHit`. A player is eliminated — zero HP or out of bounds — and
+`COMBAT.maxPerHit`. One round pays for a person once: `Pellet.hits` remembers
+who it has already paid for, a repeat contact ends the round instead of shoving
+them again, and a round that survives a person is moved outside their capsule
+(`Simulation.clearPlayer`) so the solver cannot tow them across the yard. A
+player is eliminated — zero HP or out of bounds — and
 goes inert until the next respawn (see `BassSPace Brawl Design Doc.txt`). The
 accepted shot is broadcast for tracers and sound; the shooter draws its own
 tracer immediately and ignores the echo. Cards override the gun, never the wire:

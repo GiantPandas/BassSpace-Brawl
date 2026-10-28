@@ -116,6 +116,12 @@ export type Pellet = {
   explosive: boolean;
   /** SEEKER rounds curve even without the HOMING card. */
   homing: boolean;
+  /** Players this round has already paid for. Rapier reports a fresh contact
+   *  every step a round stays inside a capsule, and each of those used to shove
+   *  the victim again — a fired round towing someone across the yard. */
+  hits: Set<number>;
+  /** Collider radius, so a round that survives a player can be put outside them. */
+  radius: number;
 };
 export type Swing = { id: number; object: number; hit: number };
 /** Per-kind default restitutions; chaos "bounce" overrides them all. */
@@ -835,6 +841,8 @@ export class Simulation {
         gun: kind,
         explosive,
         homing: st.homing || g.homing,
+        hits: new Set<number>(),
+        radius,
       });
       body.setLinvel(
         { x: dir.x * pace, y: dir.y * pace, z: dir.z * pace },
@@ -1442,6 +1450,36 @@ export class Simulation {
       true,
     );
   }
+  /** Put a round that survived a player just outside their capsule — the same
+   *  shape the collider uses, centred on the body: radius 0.3, half-height 0.55
+   *  (0.2 crouched). Anything still inside keeps colliding with them every step. */
+  private clearPlayer(pellet: Pellet, s: PlayerState) {
+    const t = pellet.body.translation();
+    const half = s.flags & 2 ? 0.2 : 0.55;
+    const cy = Math.max(s.y - half, Math.min(s.y + half, t.y));
+    let dx = t.x - s.x,
+      dy = t.y - cy,
+      dz = t.z - s.z;
+    const gap = Math.hypot(dx, dy, dz);
+    const out = 0.3 + pellet.radius + 0.05;
+    if (gap >= out) return;
+    if (gap < 1e-4) {
+      // Dead centre: leave along the round's own flight rather than guess.
+      const l = Math.max(0.001, Math.hypot(pellet.v.x, pellet.v.y, pellet.v.z));
+      dx = pellet.v.x / l;
+      dy = pellet.v.y / l;
+      dz = pellet.v.z / l;
+    } else {
+      dx /= gap;
+      dy /= gap;
+      dz /= gap;
+    }
+    pellet.body.setTranslation(
+      { x: s.x + dx * out, y: cy + dy * out, z: s.z + dz * out },
+      true,
+    );
+    pellet.v = pellet.body.linvel();
+  }
   /** The live player closest to a point, ignoring `exclude`. */
   private nearestPlayer(pos: { x: number; y: number; z: number }, exclude: number) {
     let best: { x: number; y: number; z: number } | null = null,
@@ -1619,6 +1657,17 @@ export class Simulation {
         if (other?.kind === "player") {
           const s = this.players.get(other.id)?.state;
           if (s && !s.out) {
+            // One round pays for a person once. While a surviving round sits
+            // inside a capsule Rapier reports a fresh contact every step, and
+            // each of those used to add knock, lift and stagger again — the
+            // victim gets towed wherever the round keeps rolling, and can be
+            // walked off the edge by a round already fired at them. A repeat
+            // contact is the round's end, not a second hit.
+            if (live.hits.has(other.id)) {
+              spent.push(pellet.id);
+              return;
+            }
+            live.hits.add(other.id);
             if (s.block > 0) {
               // A raised bubble catches the pellet and throws it straight back
               // down at its own shooter, same speed, aimed at their eye.
@@ -1636,6 +1685,9 @@ export class Simulation {
               live.body.setLinvel(backv, true);
               live.v = live.body.linvel();
               deflect = true;
+              // It is aimed at someone else now; the person who blocked it is no
+              // longer the round's debt.
+              live.hits.clear();
             } else {
               // CCD resolves the hit before events arrive, so read the velocity
               // the pellet had *before* this step for both direction and damage.
@@ -1685,6 +1737,14 @@ export class Simulation {
             ps.vy = Math.max(ps.vy, 0) + 2 * this.knockScale(ps.hp);
             ps.stagger = WEAPON.stagger;
           }
+        }
+        // A round that survives a person has to be outside them. Parked inside a
+        // kinematic capsule it collides again every step, and the solver's
+        // squeeze throws it — and the player — whichever way it happens to
+        // resolve. That is a round snapping back the way it came.
+        if (other?.kind === "player" && !deflect) {
+          const v = this.players.get(other.id)?.state;
+          if (v && !v.out) this.clearPlayer(live, v);
         }
         // A surviving pellet keeps flying; a spent one is removed below.
         if (deflect) return;
