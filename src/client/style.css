@@ -862,6 +862,14 @@ body.turning * {
   color: #fff;
   cursor: pointer;
   backdrop-filter: blur(8px);
+  position: relative;
+  overflow: hidden;
+  transition:
+    transform 0.14s ease,
+    border-color 0.14s ease,
+    background 0.14s ease,
+    box-shadow 0.2s ease,
+    opacity 0.2s ease;
 }
 .build-card b {
   display: block;
@@ -875,17 +883,52 @@ body.turning * {
   line-height: 1.45;
   color: #eae4f2;
 }
-.build-card:not(.taken):hover {
+.build-card:not(.taken):not(.chosen):hover {
   border-color: var(--green);
   background: #3a3160d9;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px #0008;
+}
+.build-card:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+.build-card:not(.taken):not(.chosen):active {
+  transform: translateY(0) scale(0.97);
+  box-shadow: 0 0 14px #c9f24f55;
+}
+/* A claim still on the wire pulses amber: the click has an answer of its own
+ * before the authority gets a chance to agree. */
+.build-card.chosen {
+  border-color: #ffd66b;
+  background: #4b3d2ecc;
+  animation: card-claim 0.7s ease-in-out infinite;
+}
+.build-card.chosen .pick-mark {
+  color: #ffd66b;
 }
 /* The pick answers itself: the card you took turns lime and gets stamped. */
 .build-card.taken {
   border-color: var(--green);
-  background: #3a3160e6;
-  box-shadow: 0 0 16px #c9f24f45;
+  background: #3f3566e6;
+  box-shadow: 0 0 22px #c9f24f55;
   cursor: default;
-  animation: card-lock 0.24s ease-out;
+  animation:
+    card-lock 0.26s ease-out,
+    card-flash 0.6s ease-out;
+}
+.build-card.taken b {
+  color: var(--green);
+}
+/* One sweep of light as it lands, so the lock is something you watch happen. */
+.build-card.taken::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 32%, #ffffff38 48%, transparent 64%);
+  transform: translateX(-130%);
+  animation: card-shine 0.7s ease-out 0.05s;
+  pointer-events: none;
 }
 .build-card .pick-mark {
   display: block;
@@ -895,16 +938,15 @@ body.turning * {
   letter-spacing: 0.09em;
   color: var(--green);
 }
-.build-cards.locked .build-card:not(.taken) {
-  opacity: 0.42;
+/* Everything you did not take retreats, so the board reads as spent. */
+.build-cards.locked .build-card:not(.taken):not(.chosen) {
+  opacity: 0.28;
+  filter: saturate(0.55);
   cursor: default;
+  transform: none;
 }
-.build-taken {
-  margin-top: 12px;
-  font-size: 12px;
-  letter-spacing: 0.05em;
-  color: #fff;
-  text-shadow: 0 2px 10px #000c;
+.build .eyebrow.pop {
+  animation: eyebrow-pop 0.3s ease-out;
 }
 @keyframes card-lock {
   from {
@@ -913,6 +955,56 @@ body.turning * {
   to {
     transform: scale(1);
   }
+}
+@keyframes card-flash {
+  from {
+    box-shadow: 0 0 0 3px #c9f24f99, 0 0 30px #c9f24f88;
+  }
+  to {
+    box-shadow: 0 0 22px #c9f24f55;
+  }
+}
+@keyframes card-claim {
+  0%,
+  100% {
+    box-shadow: 0 0 12px #ffd66b33;
+  }
+  50% {
+    box-shadow: 0 0 24px #ffd66b77;
+  }
+}
+@keyframes card-shine {
+  to {
+    transform: translateX(130%);
+  }
+}
+@keyframes eyebrow-pop {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.5;
+  }
+  60% {
+    transform: scale(1.06);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .build-card,
+  .build-card::after,
+  .build .eyebrow.pop {
+    animation: none !important;
+  }
+}
+.build-taken {
+  margin-top: 12px;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: #fff;
+  text-shadow: 0 2px 10px #000c;
 }
 #ready-button {
   margin-left: 6px;

@@ -158,7 +158,11 @@ let match: {
   king?: number;
   modifier?: string;
 } | null = null,
-  matchUi = "";
+  matchUi = "",
+  // The card buttons keep their own memo: the countdown ticks the outer key
+  // every second, and rebuilding the board on that replays every animation and
+  // throws away hover and focus.
+  lastBoardKey = "";
 // The card claimed during the current break. It marks itself the moment it is
 // sent and is dropped if the authority refuses it — one card per break
 // (design doc §2), so the whole board locks on the first click.
@@ -855,7 +859,19 @@ addEventListener(
   },
   { passive: true },
 );
+/**
+ * A card board is on screen, so the mouse has to stay free: pointer lock hides
+ * the cursor and sends every click to the canvas, which leaves the board
+ * looking like it ignores you. This is the same set of phases that release the
+ * lock when a `match` broadcast arrives.
+ */
+const boardOpen = () =>
+  !!match &&
+  (match.phase === "break" ||
+    match.phase === "build" ||
+    match.phase === "match-end");
 canvas.onclick = () => {
+  if (boardOpen()) return;
   if (connected && !document.pointerLockElement && !previewControls)
     void lock();
 };
@@ -1191,6 +1207,10 @@ function updateMatchUI() {
     return;
   }
   const seconds = Math.max(0, match.until - latestTick);
+  // A card board is not a pause. The "Click to explore" panel is a solid box in
+  // the same spot as the board and takes its clicks, so it goes away while
+  // there are cards to press.
+  if (boardOpen()) $("pause").hidden = true;
   const ready = match.ready.includes(id);
   // The card board is open before round 1 (`build`) and between rounds (`break`).
   const board = match.phase === "break" || match.phase === "build";
@@ -1252,47 +1272,70 @@ function updateMatchUI() {
       $("round-banner").textContent = `Round ${match.round - 1} — ${teamName(winnerId) ?? name ?? "Nobody"}`;
     } else $("round-banner").hidden = true;
     const cardsEl = $("build-cards");
-    cardsEl.innerHTML = "";
     // One card per break: the first click locks every button — even a claim
     // still on the wire — so a second pick cannot even be attempted.
     const locked = mine.some((c) => owned(c)) || !!pick;
-    cardsEl.classList.toggle("locked", locked);
-    for (const cardId of mine) {
-      const card = CARDS.find((c) => c.id === cardId);
-      if (!card) continue;
-      const chosen = owned(cardId) || pick?.card === cardId;
-      const b = document.createElement("button");
-      b.className = "build-card" + (chosen ? " taken" : "");
-      const t = document.createElement("b");
-      t.textContent = card.name;
-      const p = document.createElement("p");
-      p.textContent = card.blurb;
-      b.append(t, p);
-      if (chosen) {
+    // Rebuild when the board itself changes. The countdown ticks the outer key
+    // every second; repainting on that replays the animations and drops hover.
+    const boardKey = `${match.phase}|${match.round}|${mine.join(",")}|${pick?.card ?? ""}|${buildBits}`;
+    if (boardKey !== lastBoardKey) {
+      lastBoardKey = boardKey;
+      cardsEl.innerHTML = "";
+      cardsEl.classList.toggle("locked", locked);
+      const stamp = (b: HTMLButtonElement, text: string) => {
         b.setAttribute("aria-disabled", "true");
         const mark = document.createElement("span");
         mark.className = "pick-mark";
-        mark.textContent = "✓ Locked in";
+        mark.textContent = text;
         b.append(mark);
-      } else if (!locked)
-        b.onclick = () => {
-          pick = { card: cardId, sent: performance.now() };
-          send({ type: "pick", card: cardId });
-          if (local)
-            voice.spatial?.effect(
-              { x: local.state.x, y: local.state.y + 0.65, z: local.state.z },
-              "lock",
-            );
-        };
-      cardsEl.append(b);
+      };
+      for (const cardId of mine) {
+        const card = CARDS.find((c) => c.id === cardId);
+        if (!card) continue;
+        const chosen = owned(cardId) || pick?.card === cardId;
+        const b = document.createElement("button");
+        b.className = "build-card" + (chosen ? " taken" : "");
+        const t = document.createElement("b");
+        t.textContent = card.name;
+        const p = document.createElement("p");
+        p.textContent = card.blurb;
+        b.append(t, p);
+        if (chosen) stamp(b, "✓ Locked in");
+        else if (!locked)
+          b.onclick = () => {
+            pick = { card: cardId, sent: performance.now() };
+            // Answer the click on the frame it happens. The board repaints when
+            // a key changes, so a button that waits on the authority to say
+            // anything at all looks like a dead one.
+            b.classList.add("chosen");
+            stamp(b, "Choosing…");
+            cardsEl.classList.add("locked");
+            if (document.pointerLockElement) document.exitPointerLock();
+            send({ type: "pick", card: cardId });
+            if (local)
+              voice.spatial?.effect(
+                { x: local.state.x, y: local.state.y + 0.65, z: local.state.z },
+                "lock",
+              );
+          };
+        cardsEl.append(b);
+      }
     }
-    buildTitle.textContent = !mine.length
+    const title = !mine.length
       ? "NO CARDS LEFT TO TAKE"
       : locked
         ? "CARD LOCKED IN"
         : match.phase === "build"
           ? "CHOOSE YOUR FIRST UPGRADE"
           : "CHOOSE AN UPGRADE";
+    if (buildTitle.textContent !== title) {
+      buildTitle.textContent = title;
+      // Retrigger the flash: the line is the board's own verdict, so it should
+      // arrive with a visible beat rather than silently swapping words.
+      buildTitle.classList.remove("pop");
+      void buildTitle.offsetWidth;
+      buildTitle.classList.add("pop");
+    }
     takenLine.textContent = stack.length ? `Your build: ${stack.join(" · ")}` : "";
     takenLine.hidden = !stack.length;
     $("build").hidden = false;
@@ -1300,12 +1343,14 @@ function updateMatchUI() {
     // The board is gone before the countdown starts, so the build stays up
     // through it: you can read what you actually took.
     $("build-cards").innerHTML = "";
+    lastBoardKey = "";
     buildTitle.textContent = "YOUR BUILD";
     takenLine.textContent = stack.length ? stack.join(" · ") : "No cards yet";
     takenLine.hidden = false;
     $("build").hidden = false;
   } else {
     $("build").hidden = true;
+    lastBoardKey = "";
   }
   if (match.phase === "match-end") {
     $("round-banner").hidden = false;

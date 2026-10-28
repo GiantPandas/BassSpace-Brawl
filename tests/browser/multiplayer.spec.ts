@@ -776,13 +776,23 @@ test("the match opens on an upgrade board before round 1", async ({
   await expect(page.locator("#build-title")).toHaveText("CHOOSE YOUR FIRST UPGRADE");
   await expect(page.locator(".build-card")).toHaveCount(3);
   await expect(friend.locator(".build-card")).toHaveCount(3);
-  const card = page.locator(".build-card").first();
+  const card = page.locator(".build-card").nth(1);
   const name = (await card.locator("b").textContent())!;
+  // The "Click to explore" panel sits in the same spot as the board. It used to
+  // stay up over the middle card and swallow its clicks, so a card could look
+  // dead. The board also answers on the click itself: taken, stamped, locked.
+  await expect(page.locator("#pause")).toBeHidden();
   await card.click();
+  await expect(card).toHaveClass(/taken/);
   await expect(card.locator(".pick-mark")).toHaveText("✓ Locked in");
+  await expect(page.locator(".build-cards")).toHaveClass(/locked/);
   await expect(page.locator("#build-title")).toHaveText("CARD LOCKED IN");
   await expect(page.locator("#build-taken")).toHaveText(`Your build: ${name}`);
   await expect(page.locator("#toast")).toHaveText(`Locked in: ${name}`);
+  // The rest of the board is spent: the siblings dim and cannot be pressed.
+  const spent = page.locator(".build-card").first();
+  await expect(spent).not.toHaveClass(/taken/);
+  await expect(spent.locator(".pick-mark")).toHaveCount(0);
   // One card each closes the board; the build stays readable through the count.
   await friend.locator(".build-card").first().click();
   await expect(page.locator("#countdown")).toBeVisible();
