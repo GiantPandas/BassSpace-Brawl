@@ -726,6 +726,57 @@ test("triple shot fans three pellets out of one trigger pull", () => {
   assert.equal(new Set((shot.dirs ?? []).map((d) => d.dx)).size, 3, "the fan is distinct");
   sim.dispose();
 });
+test("a fan's own rounds fly past each other instead of spending themselves", () => {
+  const sim = new Simulation(),
+    shooter = sim.addPlayer(1);
+  const fan = PROPS.findIndex((p) => p.kind === "shotgun") + 1;
+  sim.owners.set(fan, 1);
+  shooter.state.held = fan;
+  // Up-and-forward into open sky: nothing else in the arena could end them.
+  shooter.state.pitch = -1.1;
+  const shot = sim.shoot(1);
+  assert.ok(shot, "the shot is accepted");
+  assert.equal(shot.ids?.length, 7, "every round in the sheet is named");
+  assert.equal(sim.pellets.size, 7, "seven rounds leave the muzzle");
+  for (let i = 0; i < 20; i++) sim.step();
+  assert.equal(sim.pellets.size, 7, "none of them died on their own shot column");
+  sim.dispose();
+});
+test("a seeker round with nobody to lock onto flies straight instead of vanishing", () => {
+  const sim = new Simulation(),
+    shooter = sim.addPlayer(1);
+  const gun = PROPS.findIndex((p) => p.kind === "seeker") + 1;
+  sim.owners.set(gun, 1);
+  shooter.state.held = gun;
+  shooter.state.pitch = 0;
+  const shot = sim.shoot(1);
+  assert.equal(shot?.ids?.length, 3, "three rounds away");
+  const start = new Map(
+    [...sim.pellets].map(([id, p]) => [id, { ...p.body.linvel() }]),
+  );
+  // A third of a second: far enough to see a heading change, short enough that
+  // a round brushing a bottle is not mistaken for hunting one.
+  for (let i = 0; i < 20; i++) sim.step();
+  const live = [...sim.pellets];
+  assert.equal(live.length, 3, "a round with nobody to chase spent itself");
+  const straight = live.filter(([id, p]) => {
+    const v = p.body.linvel(),
+      s = start.get(id)!;
+    return Math.hypot(v.x - s.x, v.z - s.z) < 0.02 * Math.hypot(s.x, s.z);
+  });
+  assert.ok(
+    straight.length >= 2,
+    `a seeker with no enemy steered anyway (${straight.length} of 3 kept its line)`,
+  );
+  const far = Math.max(
+    ...live.map(([, p]) => {
+      const t = p.body.translation();
+      return Math.hypot(t.x - shot!.x, t.z - shot!.z);
+    }),
+  );
+  assert.ok(far > 3, `the rounds barely moved (${far.toFixed(1)} m)`);
+  sim.dispose();
+});
 test("speed round flies the pellet fifty percent faster", () => {
   const speedOf = (build: number) => {
     const sim = new Simulation(),

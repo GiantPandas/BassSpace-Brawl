@@ -150,9 +150,15 @@ contact instead of transferring a hit, and the blast is announced once as
 `{type:"explosion", x, y, z}`. A player is eliminated
 when health reaches zero or it leaves the arena, leaving it inert until the next
 respawn. Every accepted shot is broadcast as `{type:"shot", id, object, x, y, z,
-dx, dy, dz, distance, hit, pellet}` — the muzzle origin and direction the clients
-draw the tracer from, with `pellet` the live prop's new ID and `dirs` the fan's
-directions whenever the gun fires more than one round. Cards override the gun
+dx, dy, dz, distance, hit, pellet, ids}` — the muzzle origin and direction the
+clients draw the tracer from, with `pellet` the first live round's ID, `ids` every
+round spawned and `dirs` their directions whenever the gun fires more than one —
+a lone round flies along the shot's own `dx, dy, dz`. `ids` is what lets a client
+put each round on the muzzle, already flying, the instant the trigger was pulled:
+a round armed without a heading sits at the muzzle until the next snapshot moves
+it, which reads as a judder. Pellets share one collision
+group, so a fan's own rounds pass through each other rather than spending
+themselves in the shot column. Cards override the gun
 without touching the wire: TRIPLE SHOT adds two pellets to any fan, HOMING curves
 any round, and picking a gun up loads its own magazine and whatever rounds are
 left inside it. A shooter draws its

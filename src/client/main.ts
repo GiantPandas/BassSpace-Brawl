@@ -455,11 +455,21 @@ async function connect() {
         if (m.kind === "honk" && m.object) scene.useProp(m.object, "horn");
       }
       if (m.type === "shot") {
-        // The pellets themselves ride the snapshot; a shove gun draws no tracer.
-        if (m.id !== id) {
-          const gun = kindOf(m.object);
+        // The pellets themselves ride the snapshot, and a snapshot carries no gun.
+        // The shot message arms each id with its gun's colours — and puts the
+        // round at the muzzle, flying, so it appears on the frame the trigger
+        // was pulled instead of waiting for the next snapshot.
+        const gun = kindOf(m.object);
+        if (isGun(gun) && m.ids)
+          scene.pelletArms(
+            m.ids,
+            gun,
+            // A single round has no fan of its own; the shot line is its heading.
+            m.dirs ?? m.ids.map(() => ({ dx: m.dx, dy: m.dy, dz: m.dz })),
+            { x: m.x, y: m.y, z: m.z },
+          );
+        if (m.id !== id)
           voice.spatial?.effect(m, isGun(gun) ? GUNS[gun].sound : "shoot");
-        }
         if (m.hit) {
           const struck =
             m.hit === id
@@ -674,7 +684,7 @@ function snapshot(s: Snapshot) {
   if (prev)
     for (const p of prev)
       if (p.id >= PELLET_ID_BASE && !props.some((q) => q.id === p.id))
-        scene.pelletImpact(p);
+        scene.pelletImpact(p, scene.pelletGun(p.id));
   const own = s.players.find((p) => p.id === id);
   if (!own) return;
   const before = new THREE.Vector3(local.state.x, local.state.y, local.state.z);
@@ -741,7 +751,7 @@ function fire() {
   // the blast are the authority's. scene.tracer is kept for a future laser gun.
   if (local.state.ammo > 0 && performance.now() >= reloadUntil) {
     local.state.ammo--;
-    scene.pelletGhost(muzzle);
+    scene.pelletGhost(muzzle, kind);
     voice.spatial?.effect(muzzle, g.sound);
   } else {
     // Empty or mid-reload: a metallic click instead of the report.

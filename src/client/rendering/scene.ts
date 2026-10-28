@@ -7,6 +7,7 @@ import {
   PALETTE,
   isGun,
   type Box,
+  type GunKind,
   type PropKind,
   type Vec3,
 } from "../../shared/level";
@@ -20,6 +21,60 @@ import {
   type Cosmetics,
 } from "../../shared/cosmetics";
 import type { PlayerState, PropState } from "../../shared/protocol";
+
+/** Every gun's rounds get their own colour, silhouette and tracer length in
+ *  flight. Snapshots carry no gun kind, so the shot message tells the scene
+ *  which ids are which; `stretch` is how long the tracer reads, `hot` draws it
+ *  additively, and `shape` picks the mesh — a needle, a shell, a comet. */
+type Look = {
+  color: string;
+  size: number;
+  stretch: number;
+  hot: boolean;
+  shape: "slug" | "dart" | "facet" | "needle" | "shell" | "comet";
+  /** The boom tube's shell tumbles as it arcs. */
+  spin?: boolean;
+};
+const LOOKS: Record<GunKind, Look> = {
+  gun: { color: "#ffcf8a", size: 1, stretch: 3.2, hot: false, shape: "slug" },
+  smg: { color: "#7de8ff", size: 0.75, stretch: 3.6, hot: false, shape: "dart" },
+  shotgun: { color: "#ffa45c", size: 1, stretch: 1.7, hot: false, shape: "facet" },
+  rifle: { color: "#fff6d2", size: 0.9, stretch: 4.5, hot: true, shape: "needle" },
+  launcher: {
+    color: "#ff8a5a",
+    size: 1.6,
+    stretch: 1.25,
+    hot: true,
+    shape: "shell",
+    spin: true,
+  },
+  seeker: { color: "#c48bff", size: 1.15, stretch: 2.6, hot: true, shape: "comet" },
+};
+const FALLBACK_LOOK = LOOKS.gun;
+/** Rounds are drawn on the same delayed clock as the rest of the scene: truth
+ *  arrives 20 Hz apart and the frame loop renders 100 ms in the past. Flying a
+ *  round at wall clock instead puts it ahead of the truth it is about to be
+ *  corrected to, and that rubber-band is what reads as judder. */
+const PELLET_LAG = 0.1;
+/** All authored nose-first along +Z, which is what `lookAt` points at the sky. */
+function makePelletGeos(): Record<Look["shape"], THREE.BufferGeometry> {
+  return {
+    // The starter pistol's round: the old speck, still a ball.
+    slug: new THREE.SphereGeometry(0.09, 8, 6),
+    // A sub-machine gun spits short darts, quick and thin.
+    dart: new THREE.CylinderGeometry(0.035, 0.022, 0.17, 6).rotateX(
+      -Math.PI / 2,
+    ),
+    // A fan of shot: faceted lumps, the kind that scatter on impact.
+    facet: new THREE.IcosahedronGeometry(0.1, 0),
+    // A rifle round is a needle — long before any stretch touches it.
+    needle: new THREE.ConeGeometry(0.032, 0.3, 5).rotateX(-Math.PI / 2),
+    // The boom tube launches a fat shell with a flat nose.
+    shell: new THREE.CylinderGeometry(0.085, 0.11, 0.26, 8).rotateX(Math.PI / 2),
+    // A seeker round trails a tail: cone apex behind, head in front.
+    comet: new THREE.ConeGeometry(0.11, 0.4, 7).rotateX(Math.PI / 2),
+  };
+}
 type Avatar = {
   root: THREE.Group;
   mixer: THREE.AnimationMixer;
@@ -211,10 +266,46 @@ export class GameScene {
   kingId = 0;
   /** Live pellet meshes (ids ≥ PELLET_ID_BASE); they share one geometry and material. */
   pellets = new Map<number, THREE.Mesh>();
-  /** Where each pellet was last frame, so it can be stretched along its travel. */
-  private pelletTrail = new Map<number, { x: number; y: number; z: number }>();
-  private pelletGeo = new THREE.SphereGeometry(0.09, 8, 6);
-  private pelletMat = new THREE.MeshBasicMaterial({ color: "#ffcf8a", toneMapped: false });
+  /** Which gun threw each live round, keyed by the ids in its shot message. */
+  private pelletLooks = new Map<number, GunKind>();
+  /** Dead-reckoned flight: snapshots arrive at 20 Hz and the frame loop does
+   *  not, so each round is rebased on a snapshot and flown between them. */
+  private pelletFlight = new Map<
+    number,
+    {
+      x: number;
+      y: number;
+      z: number;
+      vx: number;
+      vy: number;
+      vz: number;
+      ax: number;
+      ay: number;
+      az: number;
+      /** ms timestamp of the authoritative position above. */
+      at: number;
+      /** The authoritative position this record was last rebased on. A frame
+       *  that hands us the same coordinates is interpolation, not news: flying
+       *  the round is what fills the gap between those two truths. */
+      px: number;
+      py: number;
+      pz: number;
+      /** Painted on the trigger press; the authority has not confirmed it yet. */
+      armed: boolean;
+      /** The gap between a trigger-press ghost and the authority's first say so,
+       *  captured at `ot` and eased away over ~80 ms. This is what keeps a shot
+       *  from popping half a metre forward when the next snapshot lands. */
+      ox: number;
+      oy: number;
+      oz: number;
+      ot: number;
+      /** big-ball scale, and the gun's own look. */
+      size: number;
+      look: Look;
+    }
+  >();
+  private pelletGeos = makePelletGeos();
+  private lookMats = new Map<string, THREE.MeshBasicMaterial>();
   asset?: GLTF;
   playing = false;
   /** The two domes: a dusk sky behind the lobby, a deep one behind the match. */
@@ -1038,19 +1129,21 @@ export class GameScene {
     );
   }
   /** Muzzle ghost flash covering own-shot latency; the real pellet arrives via snapshots. */
-  pelletGhost(muzzle: { x: number; y: number; z: number }) {
+  pelletGhost(muzzle: { x: number; y: number; z: number }, kind?: GunKind) {
+    const look = kind ? LOOKS[kind] : FALLBACK_LOOK;
     this.spark(
-      "#ffd27a",
-      0.14,
+      look.color,
+      look.hot ? 0.18 : 0.14,
       new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z),
-      0.16,
+      0.12 + look.size * 0.05,
     );
   }
-  /** Impact spark where a live pellet was consumed. */
-  pelletImpact(pos: { x: number; y: number; z: number }) {
+  /** Impact spark where a live pellet was consumed, in that gun's colour. */
+  pelletImpact(pos: { x: number; y: number; z: number }, kind?: GunKind) {
+    const look = kind ? LOOKS[kind] : FALLBACK_LOOK;
     this.spark(
-      "#ffcf8a",
-      0.12,
+      look.color,
+      0.12 + look.size * 0.04,
       new THREE.Vector3(pos.x, pos.y, pos.z),
       0.1,
     );
@@ -1692,33 +1785,196 @@ export class GameScene {
     const a = this.avatars.get(id);
     if (a) a.loudness = loudness;
   }
+  /** One shared material per colour; hot rounds draw additively so they burn
+   *  through the dark sky instead of shading with it. */
+  private lookMat(color: string, hot: boolean) {
+    let m = this.lookMats.get(color);
+    if (!m) {
+      m = new THREE.MeshBasicMaterial({
+        color,
+        toneMapped: false,
+        transparent: true,
+        opacity: 0.95,
+        blending: hot ? THREE.AdditiveBlending : THREE.NormalBlending,
+        depthWrite: !hot,
+      });
+      this.lookMats.set(color, m);
+    }
+    return m;
+  }
+  /** The shot message says which gun fired which ids. That is the only place a
+   *  round's gun is known — snapshots carry position and nothing else — so it
+   *  also seeds the round at the muzzle, flying, instead of waiting up to 50 ms
+   *  for the snapshot that first carries it. */
+  pelletArms(
+    ids: number[],
+    kind: GunKind,
+    dirs?: { dx: number; dy: number; dz: number }[],
+    muzzle?: { x: number; y: number; z: number },
+  ) {
+    const look = LOOKS[kind],
+      speed = GUNS[kind].pelletSpeed,
+      now = performance.now();
+    ids.forEach((id, i) => {
+      this.pelletLooks.set(id, kind);
+      if (this.pelletFlight.has(id)) return;
+      const d = dirs?.[i];
+      if (muzzle) {
+        // The round is on screen this frame, not whenever the next snapshot
+        // feels like arriving.
+        const m = new THREE.Mesh(
+          this.pelletGeos[look.shape],
+          this.lookMat(look.color, look.hot),
+        );
+        m.position.set(muzzle.x, muzzle.y, muzzle.z);
+        m.scale.setScalar(look.size);
+        if (d) m.lookAt(muzzle.x + d.dx, muzzle.y + d.dy, muzzle.z + d.dz);
+        this.scene.add(m);
+        this.pellets.set(id, m);
+      }
+      this.pelletFlight.set(id, {
+        x: muzzle?.x ?? 0,
+        y: muzzle?.y ?? 0,
+        z: muzzle?.z ?? 0,
+        px: muzzle?.x ?? 0,
+        py: muzzle?.y ?? 0,
+        pz: muzzle?.z ?? 0,
+        vx: (d?.dx ?? 0) * speed,
+        vy: (d?.dy ?? 0) * speed,
+        vz: (d?.dz ?? 0) * speed,
+        ax: 0,
+        ay: 0,
+        az: 0,
+        at: muzzle ? now - PELLET_LAG * 1000 : 0,
+        armed: true,
+        ox: 0,
+        oy: 0,
+        oz: 0,
+        ot: 0,
+        size: look.size,
+        look,
+      });
+    });
+  }
+  /** Which gun a live round came from, for effects keyed off it. */
+  pelletGun(id: number) {
+    return this.pelletLooks.get(id);
+  }
+  /** Snapshots are 20 Hz; frames are not. Fly each round along its own velocity
+   *  until the next snapshot rebases it, capped so a round that died between
+   *  two snapshots only overshoots a little. This is what stops fast rounds
+   *  from stepping across the screen in five-centimetre judders. */
+  private advancePellets() {
+    for (const [id, m] of this.pellets) {
+      const f = this.pelletFlight.get(id);
+      if (!f || !f.at) continue;
+      const e = Math.min(0.12, Math.max(0, (performance.now() - f.at) / 1000 - PELLET_LAG));
+      // A round armed on the trigger frame was painted ahead of where truth says
+      // it is; that gap eases away instead of popping at the first snapshot.
+      const k = f.ot ? Math.max(0, 1 - (performance.now() - f.ot) / 80) : 0;
+      const x = f.x + f.vx * e + 0.5 * f.ax * e * e + f.ox * k,
+        y = f.y + f.vy * e + 0.5 * f.ay * e * e + f.oy * k,
+        z = f.z + f.vz * e + 0.5 * f.az * e * e + f.oz * k;
+      m.position.set(x, y, z);
+      const vx = f.vx + f.ax * e,
+        vy = f.vy + f.ay * e,
+        vz = f.vz + f.az * e,
+        sp = Math.hypot(vx, vy, vz);
+      const pulse = f.look.hot ? 1 + Math.sin(this.clock * 14 + id) * 0.1 : 1;
+      if (sp > 0.2) {
+        m.scale.set(
+          0.75 * f.size * pulse,
+          0.75 * f.size * pulse,
+          f.look.stretch * f.size,
+        );
+        m.lookAt(x + vx, y + vy, z + vz);
+        if (f.look.spin) m.rotateZ(this.clock * 3);
+      } else m.scale.setScalar(f.size * pulse);
+    }
+  }
   updateProps(props: PropState[], builds?: Map<number, number>) {
     const seen = new Set<number>();
     for (const p of props) {
       if (p.id >= PELLET_ID_BASE) {
+        const kind = this.pelletLooks.get(p.id);
+        const look = kind ? LOOKS[kind] : FALLBACK_LOOK;
+        // A shot string, not seven copies: the rounds of a fan vary a little in
+        // size so the sheet has grain.
+        const size =
+          look.size *
+          (1 + ((p.id % 3) - 1) * 0.12) *
+          ((builds?.get(p.owner) ?? 0) & cardBit("big-ball") ? 0.3 / 0.09 : 1);
         let m = this.pellets.get(p.id);
         if (!m) {
-          m = new THREE.Mesh(this.pelletGeo, this.pelletMat);
+          m = new THREE.Mesh(
+            this.pelletGeos[look.shape],
+            this.lookMat(look.color, look.hot),
+          );
+          m.position.set(p.x, p.y, p.z);
+          m.scale.setScalar(size);
           this.scene.add(m);
           this.pellets.set(p.id, m);
         }
-        const big = !!((builds?.get(p.owner) ?? 0) & cardBit("big-ball"));
-        const size = big ? 0.3 / 0.09 : 1;
-        m.position.set(p.x, p.y, p.z);
-        // A round is a 9 cm sphere: unreadable against a dark sky at range.
-        // Stretch it along the way it came so it reads as a tracer, not a dot.
-        const was = this.pelletTrail.get(p.id);
-        if (was) {
-          const dx = p.x - was.x,
-            dy = p.y - was.y,
-            dz = p.z - was.z;
-          const len = Math.hypot(dx, dy, dz);
-          if (len > 1e-4) {
-            m.scale.set(0.7 * size, 0.7 * size, THREE.MathUtils.clamp(len * 7, 1, 6) * size);
-            m.lookAt(m.position.x + dx, m.position.y + dy, m.position.z + dz);
-          } else m.scale.setScalar(size);
-        } else m.scale.setScalar(size);
-        this.pelletTrail.set(p.id, { x: p.x, y: p.y, z: p.z });
+        const was = this.pelletFlight.get(p.id);
+        seen.add(p.id);
+        // Frames between snapshots hand us the same 20 Hz truth, merely
+        // interpolated. Rebasing on that zeroes the velocity and freezes the
+        // round — the judder. Only coordinates that actually moved are news.
+        if (was && Math.hypot(p.x - was.px, p.y - was.py, p.z - was.pz) < 0.002)
+          continue;
+        const dt = was?.at ? (performance.now() - was.at) / 1000 : 0;
+        let vx = was?.vx ?? 0,
+          vy = was?.vy ?? 0,
+          vz = was?.vz ?? 0,
+          ax = was?.ax ?? 0,
+          ay = was?.ay ?? 0,
+          az = was?.az ?? 0;
+        if (was && dt > 0.005) {
+          const nx = (p.x - was.x) / dt,
+            ny = (p.y - was.y) / dt,
+            nz = (p.z - was.z) / dt;
+          // Acceleration keeps the launcher's arc and a seeker's bend flying
+          // through the gap between snapshots; blended so one bounce cannot
+          // spike it into a wild streak.
+          ax = was.ax * 0.35 + ((nx - was.vx) / dt) * 0.65;
+          ay = was.ay * 0.35 + ((ny - was.vy) / dt) * 0.65;
+          az = was.az * 0.35 + ((nz - was.vz) / dt) * 0.65;
+          vx = nx;
+          vy = ny;
+          vz = nz;
+        }
+        // A trigger-press ghost is a round the authority has only just begun.
+        // Capture the gap between where it was painted and where truth says it
+        // is, and let that gap ease away over ~80 ms. Snapping it instead is the
+        // half-metre pop a shot used to feel at every snapshot.
+        const armed = was?.armed ?? false;
+        const ox = armed ? m.position.x - p.x : 0,
+          oy = armed ? m.position.y - p.y : 0,
+          oz = armed ? m.position.z - p.z : 0,
+          ot = armed ? performance.now() : 0;
+        if (!armed) m.position.set(p.x, p.y, p.z);
+        this.pelletFlight.set(p.id, {
+          x: p.x,
+          y: p.y,
+          z: p.z,
+          vx,
+          vy,
+          vz,
+          ax,
+          ay,
+          az,
+          at: performance.now() - PELLET_LAG * 1000,
+          px: p.x,
+          py: p.y,
+          pz: p.z,
+          armed: false,
+          ox,
+          oy,
+          oz,
+          ot,
+          size,
+          look,
+        });
         seen.add(p.id);
         continue;
       }
@@ -1734,12 +1990,18 @@ export class GameScene {
       // In someone's hands it needs no tag; back on the ground it grows one.
       if (tag) tag.hidden = p.owner !== 0;
     }
+    const stamp = performance.now();
     for (const [id, m] of [...this.pellets]) {
-      if (!seen.has(id)) {
-        this.scene.remove(m);
-        this.pellets.delete(id);
-        this.pelletTrail.delete(id);
-      }
+      if (seen.has(id)) continue;
+      const f = this.pelletFlight.get(id);
+      // A round painted at the muzzle on the trigger press has no snapshot yet.
+      // Let it fly for a moment — the first snapshot lands well inside this — and
+      // the window carries the delayed clock the round is drawn on as well.
+      if (f?.armed && stamp - f.at < 350) continue;
+      this.scene.remove(m);
+      this.pellets.delete(id);
+      if (f) this.pelletFlight.delete(id);
+      this.pelletLooks.delete(id);
     }
   }
   setHighlight(id: number) {
@@ -1762,6 +2024,8 @@ export class GameScene {
   }
   render(dt: number) {
     this.clock += dt;
+    // Rounds fly every frame, not every snapshot.
+    this.advancePellets();
     // The dome drifts almost imperceptibly; the cloud banks are what you notice.
     if (!this.calm) this.scene.backgroundRotation.y += dt * 0.008;
     for (let i = this.effects.length - 1; i >= 0; i--) {

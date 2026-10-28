@@ -85,9 +85,17 @@ export type Shot = {
   pellet?: number;
   /** Every direction of a TRIPLE SHOT, so viewers see the full fan. */
   dirs?: { dx: number; dy: number; dz: number }[];
+  /** The live ids of this shot in `dirs` order. A fan is several rounds, and the
+   *  client paints each one in its gun's colours — snapshots carry no gun kind. */
+  ids?: number[];
 };
 /** Pellet ids start here so they never collide with the fixed prop set. */
 export const PELLET_ID_BASE = 1000;
+/** Rapier collision groups for pellets: membership `0x0002`, a filter that
+ *  excludes exactly that bit. A fan leaves the muzzle as a shot column; without
+ *  this its rounds overlap on the first step, and any contact — including their
+ *  own — spends a pellet. */
+export const PELLET_GROUPS = (0x0002 << 16) | 0xfffd;
 /** Guns dropped from the sky ride the same prop channel: their ids sit above
  *  the fixed prop set and below the pellets, so nothing collides. */
 export const DROP_ID_BASE = 500;
@@ -777,23 +785,39 @@ export class Simulation {
       (st.bigBall ? 0.3 : g.radius) *
       (this.env === "huge-pellets" ? CHAOS.pelletRadiusMult : 1);
     const middle = Math.floor((dirs.length - 1) / 2);
+    // A shot column, not a pile: a fan's rounds leave side by side (a single
+    // round keeps the muzzle point) and each flies at its own pace, so a sheet
+    // of seven reads as a string of rounds instead of one bright blob.
+    const side = { x: -d.z, y: 0, z: d.x },
+      sideLen = Math.max(0.001, Math.hypot(side.x, side.z));
+    side.x /= sideLen;
+    side.z /= sideLen;
     let firstId = 0,
       centerId = 0;
+    const ids: number[] = [];
     dirs.forEach((dir, i) => {
       if (this.nextPelletId > 64000) this.clearPellets();
       const id = this.nextPelletId++;
       if (!firstId) firstId = id;
       if (i === middle && dirs.length > 1) centerId = id;
+      ids.push(id);
+      const off = (i - middle) * radius * 2.6,
+        pace = speed * (dirs.length > 1 ? 1 + (((i * 5) % 3) - 1) * 0.06 : 1);
       const body = this.world.createRigidBody(
         RAPIER.RigidBodyDesc.dynamic()
-          .setTranslation(muzzle.x, muzzle.y, muzzle.z)
+          .setTranslation(
+            muzzle.x + side.x * off,
+            muzzle.y,
+            muzzle.z + side.z * off,
+          )
           .setLinearDamping(0.02)
           .setGravityScale(g.gravityScale)
           .setCcdEnabled(true),
       );
       let desc = RAPIER.ColliderDesc.ball(radius)
         .setMass(0.05)
-        .setRestitution(survives ? 0.9 : 0.3);
+        .setRestitution(survives ? 0.9 : 0.3)
+        .setCollisionGroups(PELLET_GROUPS);
       if (survives)
         desc = desc.setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Max);
       const collider = this.world.createCollider(desc, body);
@@ -805,14 +829,17 @@ export class Simulation {
         body,
         creator: playerId,
         expires: this.frame + g.pelletsLive,
-        v: { x: dir.x * speed, y: dir.y * speed, z: dir.z * speed },
+        v: { x: dir.x * pace, y: dir.y * pace, z: dir.z * pace },
         bounces,
-        speed,
+        speed: pace,
         gun: kind,
         explosive,
         homing: st.homing || g.homing,
       });
-      body.setLinvel({ x: dir.x * speed, y: dir.y * speed, z: dir.z * speed }, true);
+      body.setLinvel(
+        { x: dir.x * pace, y: dir.y * pace, z: dir.z * pace },
+        true,
+      );
     });
     s.vx -= d.x * g.recoil;
     s.vz -= d.z * g.recoil;
@@ -832,6 +859,7 @@ export class Simulation {
       dirs: dirs.length > 1
         ? dirs.map((x) => ({ dx: x.x, dy: x.y, dz: x.z }))
         : undefined,
+      ids,
     };
   }
   /** QUICK DRAW scales the pistol's discount, so it fits every magazine. */
@@ -1435,16 +1463,20 @@ export class Simulation {
       // Decided at fire time, so a card taken after the shot does not retroact.
       if (!p.homing) continue;
       const t = p.body.translation();
+      const seeker = p.gun === "seeker";
+      // Players, and only players. With nobody to lock onto the round flies
+      // straight: chasing furniture instead would spend it on the first crate
+      // in the way, which is what made a lobby shot vanish on the muzzle.
       const target = this.nearestPlayer(t, p.creator);
-      if (!target) continue;
       const v = p.body.linvel();
       const cs = Math.hypot(v.x, v.y, v.z);
-      if (cs < 0.01) continue;
+      if (cs < 0.01 || !target) continue;
       const dx = target.x - t.x,
         dy = target.y - t.y,
         dz = target.z - t.z;
       const dist = Math.max(0.001, Math.hypot(dx, dy, dz));
-      const k = WEAPON.homingSteer;
+      // A SEEKER bends lazily; the HOMING card on an ordinary gun corrects hard.
+      const k = seeker ? WEAPON.homingSteer * 1.8 : WEAPON.homingSteer;
       const nx = v.x / cs + (dx / dist - v.x / cs) * k,
         ny = v.y / cs + (dy / dist - v.y / cs) * k,
         nz = v.z / cs + (dz / dist - v.z / cs) * k;

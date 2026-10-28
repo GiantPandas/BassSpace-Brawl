@@ -395,7 +395,11 @@ Blender renders or in-game before committing. `.blend1` backups are ignored.
 ## 8. A controllable second player
 
 Fastest, zero code: `ROOM_CODE=<code> BOTS=1 SECONDS=600 npm run bots` joins a
-bot that walks in a slow circle. It never talks or picks things up.
+bot that walks in a slow circle. It never talks or picks things up — and it
+never sends `ready`, so it cannot start a match: the lobby gate
+(`src/host/index.ts`) waits for *every* connected member to be ready, and a
+round is the only time the sky drops guns. To watch round-time behaviour, send
+`{type:"ready",active:true}` right after `join`.
 
 For pitch, speaking and actions, write a throwaway script on this pattern,
 which is what `tools/bots.ts` does. Keep it outside the repo and run it as
