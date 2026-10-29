@@ -606,6 +606,16 @@ export class Simulation {
   eye(s: PlayerState) {
     return { x: s.x, y: s.y + (s.flags & 2 ? 0.3 : 0.65), z: s.z };
   }
+  /**
+   * The shoulder line the posed arms swing about — 0.22 m under the eye, and
+   * closer when crouched because the body squats on a 0.63 scale. A held tool is
+   * positioned from here, not from the eye: the arms turn at the shoulders, so
+   * pivoting the grip there is what keeps it in the hands at any look pitch.
+   */
+  shoulder(s: PlayerState) {
+    const e = this.eye(s);
+    return { x: e.x, y: e.y - (s.flags & 2 ? 0.14 : 0.22), z: e.z };
+  }
   direction(s: PlayerState) {
     return {
       x: -Math.sin(s.yaw) * Math.cos(s.pitch),
@@ -615,23 +625,31 @@ export class Simulation {
   }
   /** Stable hand pose shared by physics and shot visuals for compact tools. */
   heldPose(s: PlayerState, kind = this.kind(s.held)) {
-    const eye = this.eye(s),
+    const pivot = this.shoulder(s),
       d = this.direction(s),
       span = Math.max(0.001, Math.hypot(d.x, d.z)),
       right = { x: -d.z / span, z: d.x / span },
+      // The aim's own up. Hanging the tool along the world floor instead would
+      // slide it along the arms as soon as you look up or down: the hands swing
+      // with the aim, so the offset has to live in the aim frame.
+      up = {
+        x: -right.z * d.y,
+        y: right.z * d.x - right.x * d.z,
+        z: right.x * d.y,
+      },
       gun = isGun(kind) ? GUNS[kind] : null,
-      forward = gun ? gun.hold.forward : 0.72,
-      sideways = gun ? gun.hold.sideways : 0.29,
-      lowered = gun ? gun.hold.lowered : 0.16;
+      forward = gun ? gun.hold.forward : 0.82,
+      sideways = gun ? gun.hold.sideways : 0,
+      lowered = gun ? gun.hold.lowered : 0.41;
     const cy = Math.cos(s.yaw / 2),
       sy = Math.sin(s.yaw / 2),
       cx = Math.cos(s.pitch / 2),
       sx = Math.sin(-s.pitch / 2);
     return {
       position: {
-        x: eye.x + d.x * forward + right.x * sideways,
-        y: eye.y + d.y * forward - lowered,
-        z: eye.z + d.z * forward + right.z * sideways,
+        x: pivot.x + d.x * forward + right.x * sideways - up.x * lowered,
+        y: pivot.y + d.y * forward - up.y * lowered,
+        z: pivot.z + d.z * forward + right.z * sideways - up.z * lowered,
       },
       rotation: { x: cy * sx, y: sy * cx, z: -sy * sx, w: cy * cx },
     };

@@ -350,7 +350,9 @@ you are in.
 
 ## 7. Avatar bone contract (read before touching `scene.ts` or the Blender script)
 
-Rig: `hips → spine → head → jaw`, `spine → armL/armR`, `hips → legL/legR`.
+Rig: `hips → spine → head → jaw`, `spine → armL → forearmL`,
+`spine → armR → forearmR`, `hips → legL/legR`. Bones run along their local +Y
+with 0.5 m segments, so a hand sits past the forearm bone's origin.
 Rigid weights, one bone per vertex. The head is a rounded cube bisected at
 `z 1.46` (`JAW_LINE`): `Jawbowl` below rides `head`, `Cranium` above rides
 `jaw`, and the eyes, brow, nose and ears ride `jaw` too, so opening the mouth
@@ -387,9 +389,20 @@ Rules the code depends on:
   puts each driven bone's last mixer pose back, runs `mixer.update()`, then
   records the new pose; every offset is rebuilt from that recorded pose.
   Symptom of breaking this: heads and arms rotate endlessly.
-- The client never plays the `Hold` clip; the held pose is the runtime hinge on
-  the arms (`HOLD_LIFT = -1.1` rad ≈ arms forward). Head tilt is `pitch × 0.55`
-  clamped to ±1.2 rad of pitch; mouth is `0..1 × 0.5` rad.
+- The client never plays the `Hold` clip; the held pose is runtime hinges on
+  the arms (`HOLD_LIFT = -1.1` rad ≈ arms forward) plus `ELBOW_BEND = -1.0` on
+  both forearms. While a tool is held each upper arm is also turned about a
+  **horizontal** axis with `aimTurn(bone, -pitch, yaw)` — the bone's local X is
+  the body's sideways axis, so pitching there swings the arms up and down with
+  the crosshair instead of rolling them around the limb. Head tilt is
+  `pitch × 0.55` clamped to ±1.2 rad of pitch; mouth is `0..1 × 0.5` rad.
+- **A held tool hangs from the shoulders, not the eyes.** `Simulation.heldPose`
+  builds its `hold {forward, sideways, lowered}` offset in the *aim frame* about
+  `shoulderPivot()` — eye 0.22 m down — and tips the aim's vertical by
+  `sin(pitch)` so the grip keeps its height as the arms swing with the pitch.
+  Pinning it to the eye instead lets the grip slide ~0.2 m out of the hands on
+  the barrel aim up or down; `tests/core.test.ts` ("a held tool hangs from the
+  shoulders…") pins that invariance and that the barrel follows the crosshair.
 - In `generate-assets.py`, bmesh operators work in **object-local** space
   (`plane_co = JAW_LINE − HEAD[2]`, not the world height).
 

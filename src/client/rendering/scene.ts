@@ -104,6 +104,8 @@ type Avatar = {
   driven: Driven[];
   armL?: Driven;
   armR?: Driven;
+  forearmL?: Driven;
+  forearmR?: Driven;
   head?: Driven;
   jaw?: Driven;
   loudness: number;
@@ -133,9 +135,28 @@ const ARRIVAL = 2.4;
 const MOUTH_OPEN = 0.5;
 const HEAD_TILT = 0.55;
 const HOLD_LIFT = -1.1;
+/**
+ * A gun's grip is narrower than the shoulders: arms lifted straight forward put
+ * the hands 0.9 m apart, flanking the gun instead of holding it. Adding ARM_IN
+ * to the lift rolls them inward and twisting each arm about its own limb axis
+ * closes the rest. The hands land about 0.3 m further back as they close, which
+ * the `forward` of each `GUNS[kind].hold` in level.ts accounts for.
+ */
+const ARM_IN = 0.28;
+const ARM_TWIST = 0.38;
+/**
+ * The clips hang the arms, so a held gun would float in front of a chest with
+ * the forearms still pointing at the floor. Bending the elbows by this much on
+ * top of HOLD_LIFT brings the hands up to the grip the authority places there.
+ */
+const ELBOW_BEND = -1.0;
 const THIRD_PERSON_DISTANCE = 4.2;
 const THIRD_PERSON_PADDING = 0.18;
 const HINGE_AXIS = new THREE.Vector3(1, 0, 0);
+/** The limb's own axis: twisting about it turns the hand in or out. */
+const TWIST_AXIS = new THREE.Vector3(0, 1, 0);
+/** The player's right, horizontal at any pitch: what a shoulder turns about. */
+const RIGHT_AXIS = new THREE.Vector3(1, 0, 0);
 /**
  * The void the arena floats in, drawn as an equirectangular dome: a gradient, a
  * lit horizon with a glow at one bearing, drifting cloud banks and sparse stars.
@@ -222,10 +243,31 @@ function repose(a: Avatar, dt: number) {
  * non-identity rest rotations, so assigning `rotation.x` would compose the offset against a
  * stale Euler decomposition and swing the limb the wrong way.
  */
-function hinge(d: Driven | undefined, angle: number) {
-  d?.bone.quaternion
+function hinge(d: Driven | undefined, angle: number, twist = 0) {
+  if (!d) return;
+  d.bone.quaternion
     .copy(d.posed)
     .multiply(spin.setFromAxisAngle(HINGE_AXIS, angle));
+  if (twist) d.bone.quaternion.multiply(spin.setFromAxisAngle(TWIST_AXIS, twist));
+}
+const spin2 = new THREE.Quaternion();
+const worldQ = new THREE.Quaternion();
+const parentQ = new THREE.Quaternion();
+/**
+ * Swing a bone with the aim. hinge() turns a bone about its own X, and the arm
+ * bones sit diagonally in their rest pose, so turning about local X rolls the
+ * limb as well as lifting it: the hands drift off the grip as you look up or
+ * down. A shoulder turns about the player's horizontal right axis in the world,
+ * so this takes the bone's live pose into world space, turns it there, and puts
+ * it back — still one write per frame, so nothing compounds.
+ */
+function aimTurn(d: Driven | undefined, angle: number, yaw: number) {
+  if (!d || !d.bone.parent) return;
+  d.bone.parent.getWorldQuaternion(parentQ);
+  worldQ.copy(parentQ).multiply(d.bone.quaternion);
+  RIGHT_AXIS.set(Math.cos(yaw), 0, -Math.sin(yaw));
+  worldQ.premultiply(spin2.setFromAxisAngle(RIGHT_AXIS, angle));
+  d.bone.quaternion.copy(parentQ).invert().multiply(worldQ);
 }
 /** Jittery 0..1 babble, used when a speaker's level cannot be metered locally. */
 function chatter(t: number, seed: number) {
@@ -1359,6 +1401,8 @@ export class GameScene {
       driven: [],
       armL: driven(character, "armL"),
       armR: driven(character, "armR"),
+      forearmL: driven(character, "forearmL"),
+      forearmR: driven(character, "forearmR"),
       head: driven(character, "head"),
       jaw: driven(character, "jaw"),
       loudness: -1,
@@ -1366,9 +1410,14 @@ export class GameScene {
       mouth: 0,
       punch: -1,
     };
-    avatar.driven = [avatar.armL, avatar.armR, avatar.head, avatar.jaw].filter(
-      (d) => d !== undefined,
-    );
+    avatar.driven = [
+      avatar.armL,
+      avatar.armR,
+      avatar.forearmL,
+      avatar.forearmR,
+      avatar.head,
+      avatar.jaw,
+    ].filter((d) => d !== undefined);
     if (this.env === "giant-heads" && avatar.head)
       avatar.head.bone.scale.setScalar(2.6);
     // The shield is a soap-bubble shell in the player's own colour: no
@@ -1720,15 +1769,23 @@ export class GameScene {
       // A punch rides the same rule: one angle per arm per frame, so a driven
       // arm never rotates away from the pose the mixer recorded.
       let l: number | undefined, r: number | undefined;
-      if (s.held) l = r = HOLD_LIFT;
+      // The gun's pose turns with the aim, so the arms have to turn with it or
+      // the grip slides out of the hands as soon as you look up or down.
+      if (s.held) l = r = HOLD_LIFT + ARM_IN;
       const swung = this.clock - a.punch;
       if (swung < 0.42) {
         const t = Math.sin(Math.min(1, swung / 0.34) * Math.PI);
         r = (r ?? 0) - 1.55 * t;
         l = (l ?? 0) - 0.45 * t;
       }
-      if (l !== undefined) hinge(a.armL, l);
-      if (r !== undefined) hinge(a.armR, r);
+      if (l !== undefined) hinge(a.armL, l, s.held ? -ARM_TWIST : 0);
+      if (r !== undefined) hinge(a.armR, r, s.held ? ARM_TWIST : 0);
+      if (s.held) {
+        aimTurn(a.armL, -s.pitch, s.yaw);
+        aimTurn(a.armR, -s.pitch, s.yaw);
+        hinge(a.forearmL, ELBOW_BEND);
+        hinge(a.forearmR, ELBOW_BEND);
+      }
     }
     return a;
   }

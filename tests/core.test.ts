@@ -155,6 +155,49 @@ test("pickup validation, single ownership and disconnect release", () => {
   assert.equal(sim.owners.get(1), 0);
   sim.dispose();
 });
+test("a held tool hangs from the shoulders and points where you look", () => {
+  const sim = new Simulation(),
+    me = sim.addPlayer(1);
+  for (let i = 0; i < 60; i++) sim.step();
+  const gun = PROPS.findIndex((p) => p.kind === "gun") + 1;
+  const spin = (
+    q: { x: number; y: number; z: number; w: number },
+    v: { x: number; y: number; z: number },
+  ) => {
+    const cx = q.y * v.z - q.z * v.y,
+      cy = q.z * v.x - q.x * v.z,
+      cz = q.x * v.y - q.y * v.x;
+    return {
+      x: v.x + 2 * q.w * cx + 2 * q.y * cz - 2 * q.z * cy,
+      y: v.y + 2 * q.w * cy + 2 * q.z * cx - 2 * q.x * cz,
+      z: v.z + 2 * q.w * cz + 2 * q.x * cy - 2 * q.y * cx,
+    };
+  };
+  for (const pitch of [-0.6, -0.3, 0, 0.3, 0.6]) {
+    for (const yaw of [-1.2, 0, 2.4]) {
+      const s = { ...me.state, held: gun, yaw, pitch },
+        pose = sim.heldPose(s, "gun"),
+        d = sim.direction(s),
+        span = Math.hypot(d.x, d.z),
+        right = { x: -d.z / span, z: d.x / span },
+        up = { x: -right.z * d.y, y: right.z * d.x - right.x * d.z, z: right.x * d.y },
+        off = {
+          x: pose.position.x - sim.shoulder(s).x,
+          y: pose.position.y - sim.shoulder(s).y,
+          z: pose.position.z - sim.shoulder(s).z,
+        },
+        hold = GUNS.gun.hold;
+      // The grip sits at the same place in the aim frame however you look, so
+      // hands that swing with the aim keep holding it.
+      assert.ok(Math.abs(off.x * d.x + off.y * d.y + off.z * d.z - hold.forward) < 1e-9, `forward at pitch ${pitch}`);
+      assert.ok(Math.abs(off.x * right.x + off.z * right.z - hold.sideways) < 1e-9, `sideways at pitch ${pitch}`);
+      assert.ok(Math.abs(-(off.x * up.x + off.y * up.y + off.z * up.z) - hold.lowered) < 1e-9, `lowered at pitch ${pitch}`);
+      const muzzle = spin(pose.rotation, { x: 0, y: 0, z: -1 });
+      assert.ok(Math.hypot(muzzle.x - d.x, muzzle.y - d.y, muzzle.z - d.z) < 1e-9, "the barrel follows the crosshair");
+    }
+  }
+  sim.dispose();
+});
 test("replaying acknowledged state reproduces static movement", () => {
   const a = new Simulation(true),
     b = new Simulation(true),
