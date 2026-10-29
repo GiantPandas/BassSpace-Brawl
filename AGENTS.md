@@ -332,7 +332,7 @@ you are in.
 | Move spawns / props | `SPAWNS`, `PROPS` in `level.ts` | Eight spawns; prop ids are index + 1. Give a prop a kind: a gun kind (`gun`, `smg`, `shotgun`, `rifle`, `launcher`, `seeker`), `ball`, `crate`, `bat`, `horn` or junk. Props must rest on solid ground — an unsupported prop falls into the void and makes noise. |
 | Add a prop kind | `PROPS`/`PropKind` in `level.ts`, `shape()`+`PROP_BOUNCE` in `simulation.ts`, `propMesh()` in `scene.ts` | Keep children[0] of the mesh group the tintable body — `setHighlight` writes its emissive. Guns additionally need a `GUNS` entry. |
 | Add or move a door | `DOORS` in `level.ts` | Leaves slide from `p` to `p + slide`; mount them in front of the wall they cover. `auto` makes them open on approach. |
-| Tune the guns | `GUNS`/`WEAPON` in `level.ts` | Per kind: range, cooldown, magazine, `reloads` spare magazines behind it, reload, speed, pellets + spread, knock, lift, damage scale, stagger, recoil, blast, hold pose, muzzle offset, collider, sound. `WEAPON` keeps the pistol's numbers and the shared globals (spread, homing steer). Rounds belong to the gun: `reserve` rides the tick, `AIR.club` is what a spent gun hits a player with. |
+| Tune the guns | `GUNS`/`WEAPON` in `level.ts` | Per kind: range, cooldown, magazine, `reloads` spare magazines behind it, reload, speed, pellets + spread, knock, lift, damage scale, stagger, recoil, blast, `hold` + `grip` (which must match the grip brick in `propMesh()`), muzzle offset, collider, sound. `WEAPON` keeps the pistol's numbers and the shared globals (spread, homing steer). Rounds belong to the gun: `reserve` rides the tick, `AIR.club` is what a spent gun hits a player with. |
 | Tune supply drops | `AIR` in `level.ts`; `airdrop()` in `host/index.ts`; `spawnDrop()`/`removeDrop()`/`supply()` in `simulation.ts`; `supplyLabels` in `scene.ts` | Drops are props in the 500–999 id band, so they ride the prop channel; the authority owns the position and broadcasts `{type:"airdrop"}` / `{type:"airdrop-gone"}`. Rounds belong to the gun, not the player — a spent gun is a club and the sky is the only refill. |
 | Tune pool / sprinkler / grill hazards | `POOL`, `SLIP`, `GRILL` in `level.ts`; `motor()`/`step()` in `simulation.ts` | Pool entry and launch run in the deterministic motor on both sides; the slip patches cut steering while grounded; the grill booms authority-only. |
 | Tune movement | `Simulation.motor()` | Runs identically on both sides. Gravity is set in the Rapier world **and** the motor's vertical acceleration — change both. |
@@ -352,7 +352,10 @@ you are in.
 
 Rig: `hips → spine → head → jaw`, `spine → armL → forearmL`,
 `spine → armR → forearmR`, `hips → legL/legR`. Bones run along their local +Y
-with 0.5 m segments, so a hand sits past the forearm bone's origin.
+with 0.5 m segments — but Frank's arm *geometry* is only ~0.53 m shoulder to
+fist, so the mitten sits ~0.12 m past the forearm bone's origin, well short of
+the chain's end. Anchor held tools to `HAND_ANCHOR` (`level.ts`), never to a
+bone tip: doing the latter leaves the model gripping empty air.
 Rigid weights, one bone per vertex. The head is a rounded cube bisected at
 `z 1.46` (`JAW_LINE`): `Jawbowl` below rides `head`, `Cranium` above rides
 `jaw`, and the eyes, brow, nose and ears ride `jaw` too, so opening the mouth
@@ -398,8 +401,12 @@ Rules the code depends on:
   `pitch × 0.55` clamped to ±1.2 rad of pitch; mouth is `0..1 × 0.5` rad.
 - **A held tool hangs from the shoulders, not the eyes.** `Simulation.heldPose`
   builds its `hold {forward, sideways, lowered}` offset in the *aim frame* about
-  `shoulderPivot()` — eye 0.22 m down — and tips the aim's vertical by
+  `Simulation.shoulder()` — eye 0.22 m down — and tips the aim's vertical by
   `sin(pitch)` so the grip keeps its height as the arms swing with the pitch.
+  A gun's `hold` is `HAND_ANCHOR` plus its own `grip {back, up}` — the offsets of
+  the pistol-grip brick inside that model in `propMesh()` — so moving the brick
+  means changing `grip` with it. Crouching scales only the anchor part of
+  `lowered` (`HAND_ANCHOR.squat`): the avatar squashes, the tool in hand does not.
   Pinning it to the eye instead lets the grip slide ~0.2 m out of the hands on
   the barrel aim up or down; `tests/core.test.ts` ("a held tool hangs from the
   shoulders…") pins that invariance and that the barrel follows the crosshair.

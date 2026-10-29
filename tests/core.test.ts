@@ -26,6 +26,7 @@ import {
   THROW,
   WEAPON,
   GUNS,
+  HAND_ANCHOR,
   isGun,
   reserveOf,
   type GunKind,
@@ -194,6 +195,48 @@ test("a held tool hangs from the shoulders and points where you look", () => {
       assert.ok(Math.abs(-(off.x * up.x + off.y * up.y + off.z * up.z) - hold.lowered) < 1e-9, `lowered at pitch ${pitch}`);
       const muzzle = spin(pose.rotation, { x: 0, y: 0, z: -1 });
       assert.ok(Math.hypot(muzzle.x - d.x, muzzle.y - d.y, muzzle.z - d.z) < 1e-9, "the barrel follows the crosshair");
+    }
+  }
+  sim.dispose();
+});
+test("every gun's grip brick lands in the fists, standing and crouched", () => {
+  const sim = new Simulation(),
+    me = sim.addPlayer(1);
+  for (let i = 0; i < 60; i++) sim.step();
+  for (const kind of Object.keys(GUNS) as GunKind[]) {
+    for (const crouched of [false, true]) {
+      const s = {
+          ...me.state,
+          held: PROPS.findIndex((p) => p.kind === kind) + 1,
+          yaw: 0.4,
+          pitch: -0.2,
+          flags: crouched ? me.state.flags | 2 : me.state.flags & ~2,
+        },
+        pose = sim.heldPose(s, kind),
+        d = sim.direction(s),
+        span = Math.hypot(d.x, d.z),
+        right = { x: -d.z / span, z: d.x / span },
+        up = { x: -right.z * d.y, y: right.z * d.x - right.x * d.z, z: right.x * d.y },
+        off = {
+          x: pose.position.x - sim.shoulder(s).x,
+          y: pose.position.y - sim.shoulder(s).y,
+          z: pose.position.z - sim.shoulder(s).z,
+        },
+        // The models are built pointing −z with their grip brick a little back
+        // and below the origin, so undoing those offsets has to land on the
+        // measured fist anchor — anything else and the avatar grips empty air.
+        brick = {
+          forward: off.x * d.x + off.y * d.y + off.z * d.z - GUNS[kind].grip.back,
+          sideways: off.x * right.x + off.z * right.z,
+          lowered: -(off.x * up.x + off.y * up.y + off.z * up.z) + GUNS[kind].grip.up,
+        },
+        where = crouched ? "crouched" : "standing";
+      assert.ok(Math.abs(brick.forward - HAND_ANCHOR.forward) < 0.02, `${kind} forward ${where}`);
+      assert.ok(Math.abs(brick.sideways - HAND_ANCHOR.sideways) < 1e-9, `${kind} sideways ${where}`);
+      assert.ok(
+        Math.abs(brick.lowered - HAND_ANCHOR.lowered * (crouched ? HAND_ANCHOR.squat : 1)) < 0.02,
+        `${kind} lowered ${where}`,
+      );
     }
   }
   sim.dispose();

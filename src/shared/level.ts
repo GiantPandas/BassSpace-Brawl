@@ -252,14 +252,16 @@ export type GunSpec = {
   /** Shove back on the shooter, and the pellet's collider radius. */
   recoil: number;
   radius: number;
-  /** Where the grip sits in the aim frame, measured from the shoulder line
-   * (`Simulation.shoulder`): forward reach, sideways offset, how far down. The
-   * posed arms converge on one fixed point — forward 0.82, centred, 0.41 below
-   * that pivot (`HOLD_LIFT`, `ARM_IN`, `ARM_TWIST`, `ELBOW_BEND`, `aimTurn` in
-   * scene.ts) — so a gun's pistol-grip brick belongs at that anchor. The numbers
-   * below are the anchor plus the grip's own offset inside the model; a gun whose
-   * grip is elsewhere floats off the hands. */
+  /** Where the model's own origin sits in the aim frame, measured from the
+   * shoulder line (`Simulation.shoulder`): forward reach, sideways offset, how
+   * far down. It is `HAND_ANCHOR` plus this gun's `grip`, because the grip brick
+   * is what the hands should be holding, not the model's centre. */
   hold: { forward: number; sideways: number; lowered: number };
+  /** Where the pistol-grip brick sits inside the model: how far back from the
+   * origin along the barrel axis, how far above it. `propMesh` in scene.ts lays
+   * the brick out at exactly these offsets, so `grip` is the distance from the
+   * hand anchor to the hands — change the brick and change this together. */
+  grip: { back: number; up: number };
   /** Barrel tip, measured from the hand pose; the visual model matches it. */
   muzzleZ: number;
   /** Collider half-extents and mass, so a tube is heftier than a pistol. */
@@ -267,6 +269,18 @@ export type GunSpec = {
   /** Firing sound. */
   sound: "shoot" | "shoot-fast" | "shoot-heavy" | "launch";
 };
+/**
+ * The one point both fists meet at, in the aim frame about the shoulder line:
+ * `forward` reach, `sideways`, `lowered`. Measured off the shipped rig by
+ * CPU-skinning the fist vertices (`forearmL`/`forearmR` weights) at look pitches
+ * −0.6…0.6 — the posed arms swing with the aim, so this point holds still as you
+ * look up or down. Note the mitten sits only ~0.12 m past the elbow bone's own
+ * origin while the arm chain is 1 m long: the chain's tail is NOT the hand, and
+ * anchoring a tool there leaves it hanging in mid-air in front of the fists.
+ * `squat` is the crouch scale (see `scene.ts`), which lifts the fists toward the
+ * shoulders, so only `lowered` scales with it.
+ */
+export const HAND_ANCHOR = { forward: 0.40, sideways: 0, lowered: 0.37, squat: 0.63 };
 export const GUNS: Record<GunKind, GunSpec> = {
   /** The starter shove gun — the numbers above are its tuning. */
   gun: {
@@ -295,7 +309,8 @@ export const GUNS: Record<GunKind, GunSpec> = {
     },
     recoil: WEAPON.recoil,
     radius: 0.1,
-    hold: { forward: 0.96, sideways: 0, lowered: 0.21 },
+    hold: { forward: 0.54, sideways: 0, lowered: 0.17 },
+    grip: { back: 0.14, up: 0.20 },
     muzzleZ: 0.64,
     collider: { s: [0.1, 0.11, 0.3], mass: 1.1 },
     sound: "shoot",
@@ -322,7 +337,8 @@ export const GUNS: Record<GunKind, GunSpec> = {
     boom: { radius: 3, force: 6, lift: 2.5, damage: 14 },
     recoil: 0.7,
     radius: 0.08,
-    hold: { forward: 0.96, sideways: 0, lowered: 0.22 },
+    hold: { forward: 0.54, sideways: 0, lowered: 0.18 },
+    grip: { back: 0.14, up: 0.19 },
     muzzleZ: 0.6,
     collider: { s: [0.1, 0.12, 0.34], mass: 1.25 },
     sound: "shoot-fast",
@@ -349,7 +365,8 @@ export const GUNS: Record<GunKind, GunSpec> = {
     boom: { radius: 3, force: 6, lift: 2.5, damage: 14 },
     recoil: 3.2,
     radius: 0.075,
-    hold: { forward: 0.98, sideways: 0, lowered: 0.22 },
+    hold: { forward: 0.56, sideways: 0, lowered: 0.18 },
+    grip: { back: 0.16, up: 0.19 },
     muzzleZ: 0.7,
     collider: { s: [0.11, 0.13, 0.38], mass: 1.5 },
     sound: "shoot-heavy",
@@ -376,7 +393,8 @@ export const GUNS: Record<GunKind, GunSpec> = {
     boom: { radius: 3, force: 6, lift: 2.5, damage: 14 },
     recoil: 3,
     radius: 0.09,
-    hold: { forward: 0.86, sideways: 0, lowered: 0.22 },
+    hold: { forward: 0.44, sideways: 0, lowered: 0.18 },
+    grip: { back: 0.04, up: 0.19 },
     muzzleZ: 0.92,
     collider: { s: [0.09, 0.12, 0.46], mass: 1.6 },
     sound: "shoot-heavy",
@@ -403,7 +421,8 @@ export const GUNS: Record<GunKind, GunSpec> = {
     boom: { radius: 5, force: 11, lift: 5.5, damage: 26 },
     recoil: 2.6,
     radius: 0.14,
-    hold: { forward: 1.0, sideways: 0, lowered: 0.21 },
+    hold: { forward: 0.58, sideways: 0, lowered: 0.17 },
+    grip: { back: 0.18, up: 0.20 },
     muzzleZ: 0.78,
     collider: { s: [0.14, 0.16, 0.42], mass: 1.9 },
     sound: "launch",
@@ -430,7 +449,8 @@ export const GUNS: Record<GunKind, GunSpec> = {
     boom: { radius: 3, force: 6, lift: 2.5, damage: 14 },
     recoil: 1.4,
     radius: 0.12,
-    hold: { forward: 1.0, sideways: 0, lowered: 0.22 },
+    hold: { forward: 0.58, sideways: 0, lowered: 0.18 },
+    grip: { back: 0.18, up: 0.19 },
     muzzleZ: 0.66,
     collider: { s: [0.12, 0.13, 0.33], mass: 1.35 },
     sound: "shoot",

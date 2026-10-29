@@ -6,6 +6,7 @@ import {
   DOOR_TRAVEL,
   FIST,
   GUNS,
+  HAND_ANCHOR,
   HORN,
   IMPACT,
   MELEE_BOOM,
@@ -640,7 +641,13 @@ export class Simulation {
       gun = isGun(kind) ? GUNS[kind] : null,
       forward = gun ? gun.hold.forward : 0.82,
       sideways = gun ? gun.hold.sideways : 0,
-      lowered = gun ? gun.hold.lowered : 0.41;
+      // The grip sits where the fists do: `HAND_ANCHOR` plus this gun's own
+      // `grip` offsets. Crouching squashes the avatar's height — the fists rise
+      // with it — while the tool in hand is not squashed, so only the anchor
+      // part of the drop scales.
+      lowered =
+        (gun ? gun.hold.lowered : 0.41) +
+        HAND_ANCHOR.lowered * (s.flags & 2 ? HAND_ANCHOR.squat - 1 : 0);
     const cy = Math.cos(s.yaw / 2),
       sy = Math.sin(s.yaw / 2),
       cx = Math.cos(s.pitch / 2),
