@@ -492,6 +492,11 @@ body.turning * {
   padding: 0 8px;
   margin-left: 6px;
 }
+/* Health turns the hit-flash red when one solid hit is all that is left. */
+.health.low {
+  color: #e0522e;
+  border-left-color: #e0522e;
+}
 .crosshair {
   position: absolute;
   left: 50%;

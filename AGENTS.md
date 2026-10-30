@@ -253,6 +253,18 @@ aimed by the runtime rather than by clips: `head` from networked look pitch,
 `jaw` from voice loudness (mouth opens like a lid), `armL`/`armR` when `held`.
 Section 7 explains exactly how, because it is easy to get wrong.
 
+**First-person arms.** In first person your own rig is not drawn; `GameScene`
+keeps a separate viewmodel (`fp.group`) built from the same skinned clone, with
+two arms aimed in *camera* space every frame by `viewmodel(state, dt, colour)`
+— a fist at rest, a punch curve that follows the third-person `SWING` timing,
+and the held tool scaled down (`FP.toolScale`) because props are authored for
+the world. `viewRecoil(kind)` adds the muzzle kick a shot earns; `main.ts` sets
+`scene.firstPerson` on the `welcome` and on the `Tab` toggle, and calls
+`viewmodel()` in the frame loop where `updatePlayer()` handles third person. A
+held prop is hidden from the world (`updateProps`), so it exists once — in the
+hands. The viewmodel group hangs off the camera, which is why `ensureViewmodel`
+adds the camera to the scene: a renderer traverses the scene, not the camera.
+
 Wire tables, byte layouts and limits: `docs/architecture.md`. Do not restate
 them here; change them there when you change `protocol.ts`.
 
@@ -302,7 +314,8 @@ you are in.
    ```ts
    state      // your predicted PlayerState (x, y, z, yaw, pitch, flags, held, …)
    members    // [{ id, name, connected, voiceReady }]
-   scene      // GameScene — avatars Map, props Map, camera, renderer
+   scene      // GameScene — avatars Map, props Map, propKindOf(id), camera,
+              // renderer, fp (viewmodel), firstPerson, localId
    sim        // your prediction Simulation
    voice      // Voice — peers Map, status, codec, loudness(id), force(id, relay)
    input(code, down)   // e.g. input("KeyW", true) — bypasses pointer lock
@@ -342,10 +355,11 @@ you are in.
 | Add a player action | `app.ts` `msg.type === "action"` → validate with server state → mutate `Simulation`; client trigger in `main.ts`; visual in `scene.ts` | Clients never decide ownership or authoritative position. Dedupe by `request`. |
 | Add replicated state | `protocol.ts` writer **and** reader, `PlayerState`/`PropState`, tests in `core.test.ts`, tables in `docs/architecture.md` | Bump `VERSION` for incompatible layouts. Keep membership/control out of the tick. Respect the fixed record sizes and ±327.67 m prop range. |
 | Change how remote players look or animate | `scene.ts` `avatar()`, `updatePlayer()`, `render()` | Runtime-owned bones: section 7. |
+| Change your own first-person arms or held tool | `scene.ts` `viewmodel()`, `viewTool()`, `viewRecoil()`, `FP` | Camera space is −z forward. `FP.toolScale` keeps a world-authored prop readable at eye length; `main.ts` drives it outside the third-person branch. |
 | Change the character mesh or rig | `tools/generate-assets.py` → regenerate → commit `.glb` **and** `.blend` | Keep the clip names, `Jacket / tintable`, `BodyColor / tintable`, and the bone names, or update `scene.ts` with them. |
 | Change voice range / acoustics | `VOICE` in `level.ts`; `REVERB_REGIONS` in `acoustics.ts`; graph in `spatial.ts`; IRs via `tools/generate-ir.py` | Regions are axis-aligned boxes that blend across `blendWidth`. |
 | Change voice transport behaviour | `voice.ts` state machine, `app.ts` `pair()/route()/route-request` | Both endpoints must confirm before an upgrade. Read `docs/voice.md` first. |
-| Change UI copy, HUD, drawers | The template string at the top of `main.ts`; `style.css` | Ids like `#room-code`, `#hud`, `#loading`, button names are used by the Playwright tests — keep them or update the tests. |
+| Change UI copy, HUD, drawers | The template string at the top of `main.ts`; `style.css` | Ids like `#room-code`, `#hud`, `#loading`, button names are used by the Playwright tests — keep them or update the tests. `#health` is your own HP, printed from the predicted state and showing `♥ OUT` once eliminated. |
 | Change branding | `public/favicon.svg`, the inline SVG in the `.brand` button, `.brand-*` rules | The mark's paths are duplicated deliberately (favicon vs inline); change both. |
 
 ## 7. Avatar bone contract (read before touching `scene.ts` or the Blender script)

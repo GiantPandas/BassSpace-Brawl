@@ -158,6 +158,35 @@ const TWIST_AXIS = new THREE.Vector3(0, 1, 0);
 /** The player's right, horizontal at any pitch: what a shoulder turns about. */
 const RIGHT_AXIS = new THREE.Vector3(1, 0, 0);
 /**
+ * The first-person seat sits inside the head, so the rigged body is invisible
+ * from it: these arms are what your own punches, and the tool in your hand,
+ * look like up close. Everything is camera space — forward is −z, up is +y.
+ */
+const FP = {
+  /** Shoulders: this far to each side of the eye, this far below it, and this
+   *  far in FRONT of it. A sleeve that starts at the eye itself fills the whole
+   *  screen — near the lens, a 0.11 m box is taller than the frame. */
+  side: 0.2,
+  drop: 0.26,
+  near: 0.3,
+  /** Hands at rest, with a gun in them, and with nothing. The 68° lens makes
+   *  the lower third of the screen about 0.4 m tall at arm's length, so these
+   *  sit just inside it: a mitten at this depth is a quarter of the frame. */
+  gunR: new THREE.Vector3(0.03, -0.22, -0.62),
+  gunL: new THREE.Vector3(-0.11, -0.24, -0.6),
+  freeR: new THREE.Vector3(0.13, -0.24, -0.58),
+  freeL: new THREE.Vector3(-0.14, -0.26, -0.52),
+  /** A punch throws the fist this far past its rest, on the third-person curve. */
+  reach: 0.6,
+  /** Props are authored for the world; from the eye they would fill the frame. */
+  toolScale: 0.6,
+};
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
+const FP_HAND = new THREE.Vector3(),
+  FP_OTHER = new THREE.Vector3(),
+  FP_DIR = new THREE.Vector3(),
+  FP_SHOULDER = new THREE.Vector3();
+/**
  * The void the arena floats in, drawn as an equirectangular dome: a gradient, a
  * lit horizon with a glow at one bearing, drifting cloud banks and sparse stars.
  * The match palette is deliberately deep — a pellet against the old pale sky was
@@ -311,6 +340,26 @@ export class GameScene {
   env = "none";
   /** King of the Yard: the id wearing the crown, 0 for none. */
   kingId = 0;
+  /** Whose hands the first-person viewmodel shows: the local player, 0 until
+   *  welcome. Held props of this id are hidden in the world — the viewmodel
+   *  carries them instead, so nothing floats past the eye twice. */
+  localId = 0;
+  /** Third person poses the real rig instead of these arms. */
+  firstPerson = true;
+  /** The camera-parented arms, built once. `arms[0]` is the left. */
+  private fp: {
+    group: THREE.Group;
+    arms: { pivot: THREE.Object3D; sleeve: THREE.Mesh; fist: THREE.Mesh }[];
+    jacket: THREE.MeshStandardMaterial;
+    body: THREE.MeshStandardMaterial;
+    tool: THREE.Group | null;
+    toolKind: PropKind | null;
+    /** Scene time of the local player's last punch, −10 before the first. */
+    punch: number;
+    /** Metres the hands are kicked back by a shot, eased away each frame. */
+    recoil: number;
+    color: number;
+  } | null = null;
   /** Live pellet meshes (ids ≥ PELLET_ID_BASE); they share one geometry and material. */
   pellets = new Map<number, THREE.Mesh>();
   /** Which gun threw each live round, keyed by the ids in its shot message. */
@@ -1294,7 +1343,150 @@ export class GameScene {
   punch(playerId: number, held = 0) {
     const a = this.avatars.get(playerId);
     if (a) a.punch = this.clock;
+    if (this.fp && playerId === this.localId) this.fp.punch = this.clock;
     if (held) this.propUses.set(held, { kind: "swing", started: this.clock });
+  }
+  /** Kick the first-person hands for a shot you pressed; the round itself is the
+   *  authority's and rides the snapshots. */
+  viewRecoil(kind: GunKind) {
+    if (this.fp) this.fp.recoil = Math.min(0.1, GUNS[kind].recoil * 0.03);
+  }
+  /**
+   * Pose the first-person arms from the local player's own state. Third person
+   * hinges the real rig; from inside the head there is no rig to see, so a punch
+   * would otherwise be a noise with no picture.
+   */
+  viewmodel(s: PlayerState, dt: number, color = this.localId - 1) {
+    const v = this.ensureViewmodel(color);
+    v.group.visible = this.firstPerson;
+    if (!this.firstPerson) return;
+    const kind = this.propKindOf(s.held),
+      gun = isGun(kind) ? GUNS[kind] : null,
+      swung = this.clock - v.punch,
+      // The same out-and-back curve `updatePlayer` hinges the real arms on, so
+      // a punch reads identically from either seat.
+      t = swung < 0.34 ? Math.sin((swung / 0.34) * Math.PI) : 0,
+      crouch = (s.flags & 2) !== 0,
+      sway = Math.sin(this.clock * 1.7) * 0.01,
+      bob = Math.sin(this.clock * ((s.flags & 4) !== 0 ? 9 : 5.5)) * 0.013,
+      handR = FP_HAND.copy(gun ? FP.gunR : FP.freeR),
+      handL = FP_OTHER.copy(gun ? FP.gunL : FP.freeL);
+    handR.x += sway;
+    handR.y += bob - (crouch ? 0.05 : 0) + 0.05 * t + v.recoil * 0.4;
+    handR.z += -FP.reach * t + v.recoil;
+    handL.x -= sway;
+    handL.y -= bob * 0.6 + (crouch ? 0.04 : 0) + 0.05 * t;
+    handL.z += 0.05 * t;
+    // Each sleeve is a box that grows along +z, and `lookAt` aims +z at the hand:
+    // placing the fist at the reach makes the hand hold whatever it is holding.
+    for (const [i, arm] of v.arms.entries()) {
+      const hand = i === 1 ? handR : handL,
+        len = FP_SHOULDER
+          .set((i === 1 ? 1 : -1) * FP.side, -FP.drop, 0.05)
+          .distanceTo(hand);
+      arm.pivot.position.copy(FP_SHOULDER);
+      arm.pivot.quaternion.setFromUnitVectors(
+        Z_AXIS,
+        FP_DIR.copy(hand).sub(FP_SHOULDER).normalize(),
+      );
+      arm.sleeve.scale.z = len;
+      arm.fist.position.z = len;
+    }
+    this.viewTool(v, kind, gun ? gun.grip : null, handR, swung);
+    v.recoil *= Math.exp(-dt * 11);
+  }
+  /** The tool in the right hand: swapped when the hand changes, swung when it is junk. */
+  private viewTool(
+    v: NonNullable<typeof this.fp>,
+    kind: PropKind | null | undefined,
+    grip: { back: number; up: number } | null,
+    hand: THREE.Vector3,
+    swung: number,
+  ) {
+    const want = kind ?? null;
+    if (v.toolKind !== want) {
+      if (v.tool) {
+        v.tool.traverse((o) => {
+          if (!(o instanceof THREE.Mesh)) return;
+          o.geometry.dispose();
+          for (const m of Array.isArray(o.material) ? o.material : [o.material])
+            m.dispose();
+        });
+        v.group.remove(v.tool);
+      }
+      v.tool = want ? this.propMesh(want, this.localId || 1) : null;
+      v.toolKind = v.tool ? want : null;
+      if (v.tool) v.group.add(v.tool);
+    }
+    if (!v.tool) return;
+    // Gun models are built pointing −z, exactly as the camera looks, and their
+    // grip brick sits `back` behind and `up` above the origin — so the origin
+    // goes that much past the fist and the hands hold the grip, not the barrel.
+    const g = grip ?? { back: 0.06, up: 0.05 };
+    v.tool.scale.setScalar(FP.toolScale);
+    v.tool.position.set(
+      hand.x,
+      hand.y + g.up * FP.toolScale,
+      hand.z - g.back * FP.toolScale,
+    );
+    v.tool.rotation.set(0, 0, 0.06);
+    if (!grip && swung < 0.42) {
+      // Junk swings through the arc the world prop gets, so the throw looks the
+      // same from either seat.
+      const a = Math.sin(Math.min(1, swung / 0.34) * Math.PI) * 1.2;
+      v.tool.rotateY(-a);
+      v.tool.rotateX(a * 0.28);
+    }
+  }
+  /** Build the arms once, and keep their colours on the player's skin. */
+  private ensureViewmodel(color: number) {
+    if (!this.fp) {
+      const jacket = new THREE.MeshStandardMaterial({ roughness: 0.85 }),
+        body = new THREE.MeshStandardMaterial({ roughness: 0.85 }),
+        trim = new THREE.MeshStandardMaterial({ color: "#1d2128", roughness: 0.7 }),
+        sleeve = new THREE.BoxGeometry(0.11, 0.11, 1),
+        fist = new THREE.SphereGeometry(0.09, 12, 9),
+        group = new THREE.Group(),
+        arms: { pivot: THREE.Object3D; sleeve: THREE.Mesh; fist: THREE.Mesh }[] =
+          [];
+      sleeve.translate(0, 0, 0.5);
+      fist.scale(1, 0.88, 1.05);
+      for (const side of [-1, 1]) {
+        const pivot = new THREE.Object3D(),
+          arm = new THREE.Mesh(sleeve, jacket),
+          hand = new THREE.Mesh(fist, body),
+          cuff = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.05), trim);
+        cuff.position.z = -0.1; // the wrist, just inside the mitten
+        hand.add(cuff);
+        pivot.add(arm, hand);
+        group.add(pivot);
+        arms.push({ pivot, sleeve: arm, fist: hand });
+      }
+      // A camera's children are only drawn when the camera itself is in the
+      // graph — `render(scene, camera)` traverses the scene, not the camera.
+      this.scene.add(this.camera);
+      this.camera.add(group);
+      this.fp = {
+        group,
+        arms,
+        jacket,
+        body,
+        tool: null,
+        toolKind: null,
+        punch: -10,
+        recoil: 0,
+        color: -1,
+      };
+    }
+    if (this.fp.color !== color) {
+      const cos = this.cosmeticCache.get(this.localId) ?? DEFAULT_COSMETICS,
+        skin = SKINS.find((s) => s.id === cos.skin) ?? SKINS[0],
+        tint = CHARACTER_PALETTE[color % CHARACTER_PALETTE.length];
+      this.fp.jacket.color.set(skin.jacket ?? tint);
+      this.fp.body.color.set(skin.body ?? skin.jacket ?? tint);
+      this.fp.color = color;
+    }
+    return this.fp;
   }
   avatar(id: number, name: string, color = id - 1) {
     const existing = this.avatars.get(id);
@@ -2053,6 +2245,9 @@ export class GameScene {
         position: m.position.clone(),
         rotation: m.quaternion.clone(),
       });
+      // The first-person seat carries its own copy of whatever you hold, so the
+      // world mesh would be the same tool floating past the eye twice.
+      m.visible = !(this.firstPerson && p.owner === this.localId);
       const tag = this.supplyLabels.get(p.id);
       // In someone's hands it needs no tag; back on the ground it grows one.
       if (tag) tag.hidden = p.owner !== 0;
