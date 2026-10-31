@@ -1189,33 +1189,17 @@ export class Simulation {
   }
   /**
    * Round start, run by both sides off the countdown broadcast: nobody holds
-   * anything, sky guns are retired, and the arena's own props drop back onto
-   * where they were built — rebuilt if a throw sent one off the map, because a
-   * fresh round is fought on a clean field. Returns the ids that vanished, so
-   * the host can tell every client to stop drawing them.
+   * anything and the arena is stripped — the round's guns come out of the sky,
+   * so a fresh round is fought on an empty field instead of on whatever the
+   * lobby threw around. Returns the ids that vanished, so the host can tell
+   * every client to stop drawing them.
    */
   clearProps(): number[] {
     for (const c of this.players.values()) c.state.held = 0;
     for (const id of [...this.owners.keys()]) this.owners.set(id, 0);
     const gone: number[] = [];
-    for (const id of [...this.props.keys()]) {
-      if (id < DROP_ID_BASE || id >= PELLET_ID_BASE) continue;
+    for (const id of [...this.props.keys()])
       if (this.removeDrop(id)) gone.push(id);
-    }
-    for (const [i, prop] of this.arena.props.entries()) {
-      const id = i + 1,
-        body = this.props.get(id);
-      if (!body) {
-        this.createProp(id, prop.kind, prop.p);
-        continue;
-      }
-      // Dropped from just above the spawn, so a prop resting on a shelf does
-      // not pop into the shelf it has to fall through.
-      body.setTranslation({ x: prop.p[0], y: prop.p[1] + 1.5, z: prop.p[2] }, true);
-      body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-      body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-      this.propMeta.delete(id);
-    }
     return gone;
   }
   /** Retire a sky-dropped gun. One in someone's hands is left alone. */

@@ -420,6 +420,18 @@ export class GameScene {
       /** big-ball scale, and the gun's own look. */
       size: number;
       look: Look;
+      /** Where the shot message put the round: how far it has travelled from
+       *  the muzzle is what the fade below measures. */
+      sx: number;
+      sy: number;
+      sz: number;
+      /** First person only: the gap between the barrel you can see and the
+       *  muzzle the authority spawned the round at. Rounds are world truth, but
+       *  from inside the head the only gun on screen is the viewmodel, so a
+       *  round that starts thirty centimetres under that barrel looks like it
+       *  leaves nothing. The gap fades out over the first two metres, where no
+       *  one is close enough to measure it. */
+      align: THREE.Vector3 | null;
     }
   >();
   private pelletGeos = makePelletGeos();
@@ -2109,6 +2121,7 @@ export class GameScene {
     dirs?: { dx: number; dy: number; dz: number }[],
     muzzle?: { x: number; y: number; z: number },
     distance?: number | null,
+    fromViewpoint = false,
   ) {
     const look = LOOKS[kind],
       speed = GUNS[kind].pelletSpeed,
@@ -2152,7 +2165,25 @@ export class GameScene {
         armed: true,
         size: look.size,
         look,
+        sx: muzzle?.x ?? 0,
+        sy: muzzle?.y ?? 0,
+        sz: muzzle?.z ?? 0,
+        align: null,
       });
+      if (fromViewpoint && muzzle && this.fp?.tool) {
+        // The viewmodel's own barrel tip in world space: the gun you can see.
+        // The model points −z, so its tip is `muzzleZ` ahead of the tool's
+        // origin, and the tool is drawn shrunken by `FP.toolScale`.
+        const tip = new THREE.Vector3(
+          this.fp.tool.position.x,
+          this.fp.tool.position.y + 0.02 * FP.toolScale,
+          this.fp.tool.position.z - GUNS[kind].muzzleZ * FP.toolScale,
+        );
+        this.camera.localToWorld(tip);
+        this.pelletFlight.get(id)!.align = tip.sub(
+          new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z),
+        );
+      }
     });
   }
   /** Which gun a live round came from, for effects keyed off it. */
@@ -2178,7 +2209,17 @@ export class GameScene {
       const x = f.x + f.vx * e + 0.5 * f.ax * e * e,
         y = f.y + f.vy * e + 0.5 * f.ay * e * e,
         z = f.z + f.vz * e + 0.5 * f.az * e * e;
-      m.position.set(x, y, z);
+      // The first-person gap, faded by how far the round has left the muzzle.
+      let dx = x,
+        dy = y,
+        dz = z;
+      if (f.align) {
+        const k = Math.max(0, 1 - Math.hypot(x - f.sx, y - f.sy, z - f.sz) / 2);
+        dx += f.align.x * k;
+        dy += f.align.y * k;
+        dz += f.align.z * k;
+      }
+      m.position.set(dx, dy, dz);
       const vx = f.vx + f.ax * e,
         vy = f.vy + f.ay * e,
         vz = f.vz + f.az * e,
@@ -2190,7 +2231,7 @@ export class GameScene {
           0.75 * f.size * pulse,
           f.look.stretch * f.size,
         );
-        m.lookAt(x + vx, y + vy, z + vz);
+        m.lookAt(dx + vx, dy + vy, dz + vz);
         if (f.look.spin) m.rotateZ(this.clock * 3);
       } else m.scale.setScalar(f.size * pulse);
     }
@@ -2321,15 +2362,23 @@ export class GameScene {
           max: null,
           size,
           look,
+          // A round with no shot message behind it (a late joiner, a dropped
+          // message) starts its clock here, so the spawn and any first-person
+          // gap survive from the record this replaces.
+          sx: was?.sx ?? p.x,
+          sy: was?.sy ?? p.y,
+          sz: was?.sz ?? p.z,
+          align: was?.align ?? null,
         });
         seen.add(p.id);
         continue;
       }
       let m = this.props.get(p.id);
       if (!m) {
-        // A round start puts furniture back, including a prop an earlier round
-        // threw off the map. The layout knows its kind, so build the mesh here
-        // instead of leaving a body with nothing to draw.
+        // A prop this client has no mesh for — it joined after the room was
+        // built, or missed the message that created it. The layout knows its
+        // kind, so build the mesh here rather than leaving a body with nothing
+        // to draw. Round starts remove props; nothing is rebuilt.
         const kind = this.propKindOf(p.id);
         if (!kind) continue;
         m = this.propMesh(kind, p.id);

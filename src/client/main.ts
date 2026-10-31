@@ -502,6 +502,9 @@ async function connect() {
             // The authority's own line length: a hit reports the distance to the
             // thing it struck, a miss the gun's range. The ghost stops there.
             typeof m.distance === "number" ? m.distance : null,
+            // Your own rounds, seen from inside your own head: start them at the
+            // barrel of the gun you can see instead of at the hidden world pose.
+            m.id === id && cameraMode === "first",
           );
         if (m.id !== id)
           voice.spatial?.effect(m, isGun(gun) ? GUNS[gun].sound : "shoot");

@@ -501,7 +501,7 @@ test("a shield-blocked seeker round goes back for whoever fired it", () => {
   assert.ok(rehunted, "the deflection retargets the shooter, not the shield");
   sim.dispose();
 });
-test("a prop off the edge of the arena is gone, and the round gate brings it back", () => {
+test("a prop thrown off the edge of the arena is gone for good", () => {
   const sim = new Simulation();
   sim.addPlayer(1);
   // Any arena prop will do; the first one is guaranteed to exist.
@@ -511,24 +511,20 @@ test("a prop off the edge of the arena is gone, and the round gate brings it bac
   sim.step();
   assert.ok(!sim.props.has(crate), "outside the bounds retires it");
   assert.deepEqual(sim.dropEvents, [crate], "clients hear to stop drawing it");
-  const built = sim.arena.props[crate - 1];
   sim.clearProps();
-  const back = sim.props.get(crate)!.translation();
-  assert.ok(
-    Math.abs(back.x - built.p[0]) < 0.02 && Math.abs(back.z - built.p[2]) < 0.02,
-    "the next round's clear puts it back on its build pad",
-  );
-  assert.ok(back.y >= built.p[1] - 0.01, "and it is standing on the pad, not sunk into it");
+  assert.ok(!sim.props.has(crate), "nothing rebuilds it when the next round opens");
   sim.dispose();
 });
-test("the round gate clears sky guns and empties every hand", () => {
+test("the round gate strips the arena bare and empties every hand", () => {
   const sim = new Simulation(), player = sim.addPlayer(1);
   const drop = sim.spawnDrop("smg", { x: 0, y: 4, z: 0 });
   sim.step();
   assert.ok(sim.drops.has(drop), "a gun from the sky is a drop, not an arena prop");
+  assert.ok(sim.props.size > 1, "the lobby is furnished before the gate");
   sim.owners.set(drop, 1);
   player.state.held = drop;
-  assert.deepEqual(sim.clearProps(), [drop], "it is retired and reported once");
+  assert.ok(sim.clearProps().includes(drop), "the sky gun is retired and reported");
+  assert.equal(sim.props.size, 0, "a round opens on an empty field");
   assert.equal(sim.drops.size, 0, "no supply crate survives the gate");
   assert.equal(player.state.held, 0, "nobody starts a round holding something");
   sim.dispose();
