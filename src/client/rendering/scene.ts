@@ -1139,7 +1139,7 @@ export class GameScene {
     }
   }
   /** Explosions told by the authority — chaos booms, dangerous junk blasts: fireball and sparks at a point. */
-  boomAt(x: number, y: number, z: number) {
+  boomAt(x: number, y: number, z: number, r?: number) {
     const p = new THREE.Vector3(x, y + 0.5, z);
     const ball = new THREE.Mesh(
       new THREE.IcosahedronGeometry(0.55, 1),
@@ -1155,6 +1155,27 @@ export class GameScene {
     this.effects.push({ mesh: ball, life: 0, ttl: 0.45, shrink: false, grow: 1.6 });
     this.spark("#ffd27a", 0.35, p, 0.35);
     this.spark("#ff9a3c", 0.22, new THREE.Vector3(x + 0.4, y + 0.8, z), 0.3);
+    if (r !== undefined) {
+      // A blast with a stated radius also gets a shockwave ring laid flat at
+      // that height, growing out to exactly that radius: the area the shove
+      // will reach, readable before it lands. It is its own mesh because a
+      // decal would only show on whatever surface happens to be under it.
+      const wave = new THREE.Mesh(
+        new THREE.RingGeometry(0.82, 1, 44),
+        new THREE.MeshBasicMaterial({
+          color: "#ffd489",
+          transparent: true,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      wave.rotation.x = -Math.PI / 2;
+      wave.position.set(x, y + 0.04, z);
+      this.scene.add(wave);
+      // The effect loop ramps scale from 0.3, so this ends at exactly `r` out.
+      this.effects.push({ mesh: wave, life: 0, ttl: 0.6, shrink: false, grow: r - 0.3 });
+    }
   }
   /**
    * Chaos env modifier for the visuals: giant heads scale every driven head
@@ -2304,8 +2325,17 @@ export class GameScene {
         seen.add(p.id);
         continue;
       }
-      const m = this.props.get(p.id);
-      if (!m) continue;
+      let m = this.props.get(p.id);
+      if (!m) {
+        // A round start puts furniture back, including a prop an earlier round
+        // threw off the map. The layout knows its kind, so build the mesh here
+        // instead of leaving a body with nothing to draw.
+        const kind = this.propKindOf(p.id);
+        if (!kind) continue;
+        m = this.propMesh(kind, p.id);
+        this.scene.add(m);
+        this.props.set(p.id, m);
+      }
       m.position.set(p.x, p.y, p.z);
       m.quaternion.set(p.qx, p.qy, p.qz, p.qw).normalize();
       this.propBases.set(p.id, {

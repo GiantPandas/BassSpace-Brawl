@@ -218,6 +218,9 @@ export type GunSpec = {
   range: number;
   /** Ticks between trigger pulls at 60 Hz. */
   cooldown: number;
+  /** Full-auto: a held mouse keeps pulling the trigger on `cooldown` instead of
+   *  one shot per click. Only the BUZZ GUN is fast enough to mean it. */
+  auto?: boolean;
   /** Rounds per magazine. */
   ammo: number;
   /** Spare magazines the gun carries for itself. Reloads take rounds from
@@ -320,6 +323,7 @@ export const GUNS: Record<GunKind, GunSpec> = {
     name: "BUZZ GUN",
     range: 14,
     cooldown: 7,
+    auto: true,
     ammo: 26,
     reloads: 2,
     reload: 130,
@@ -478,7 +482,7 @@ export const gunReloadTicks = (gun: GunSpec, reloadTicks: number) =>
  */
 export const AIR = {
   /** Ticks between drops at 60 Hz. */
-  period: 9 * 60,
+  period: 4 * 60,
   /** Metres above the landing point a gun appears. */
   height: 7.5,
   /** How far off a spawn it may land, metres. */
@@ -487,7 +491,7 @@ export const AIR = {
    *  further is a wall top or the void: try again. */
   maxDrop: 1.6,
   /** Drop at most this many guns at once. */
-  max: 4,
+  max: 6,
   /** Ticks an untouched gun lies in the open before it dissolves. */
   linger: 45 * 60,
   /** HP scale for a thrown gun that is completely empty: dead weight as a club. */
@@ -495,6 +499,12 @@ export const AIR = {
   /** The rotation drops cycle through, so a round sees every gun. */
   kinds: ["smg", "shotgun", "rifle", "gun", "seeker", "launcher"] as GunKind[],
 };
+/**
+ * Air dash: one burst per airborne arc, at this speed for this many ticks.
+ * It used to be a plain `+= 8` on top of the run velocity, which the motor's
+ * steering convergence ate in about four ticks — invisible in play.
+ */
+export const DASH = { speed: 11, ticks: 20 };
 /** Bare-handed shove — the base numbers the melee cards scale. */
 export const FIST = {
   range: 1.95,
@@ -509,6 +519,8 @@ export const FIST = {
 };
 /** HAMMER HANDS: a landed punch also bellows outward, mostly as a shove. */
 export const MELEE_BOOM = { radius: 2.4, force: 6, lift: 2.5, damage: 2 };
+/** Rocket legs' jump blast: how far it shoves, how tall it reaches, and what it does. */
+export const ROCKET_LEGS = { radius: 2.5, height: 3, force: 7, lift: 3, stagger: 18 };
 /** How hard a throw leaves the hand: launch speed, a little lift, some spin. */
 export const THROW = { speed: 17, lift: 2.6, spin: 3 };
 /** A horn is harmless, but the authority still rate-limits the noise. */

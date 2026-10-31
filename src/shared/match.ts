@@ -13,6 +13,24 @@ export const MATCH = {
   cardsOffered: 3,
 };
 
+/**
+ * The two clocks the room's owner can set from the lobby, in seconds. Both
+ * sides read the same bounds — the client builds its picker from these, the
+ * authority clamps against them — so a hostile client cannot stall a match.
+ */
+export const TIMINGS = {
+  round: { min: 30, max: 180, def: Math.round(MATCH.roundTicks / 60) },
+  card: { min: 5, max: 60, def: Math.round(MATCH.buildPhaseTicks / 60) },
+};
+/** A lobby timing value, or the default when a client sends rubbish. */
+export const timedSeconds = (
+  value: unknown,
+  bound: { min: number; max: number; def: number },
+) =>
+  typeof value === "number" && Number.isFinite(value)
+    ? Math.min(bound.max, Math.max(bound.min, Math.round(value)))
+    : bound.def;
+
 /** Impact HP: collisions above `threshold` relative m/s do damage (design doc §9). */
 export const COMBAT = {
   hpMax: 100,

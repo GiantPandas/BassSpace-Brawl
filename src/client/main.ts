@@ -36,7 +36,7 @@ import {
   sanitizeCosmetics,
   type Cosmetics,
 } from "../shared/cosmetics";
-import { chaosModifierFor, modifierName, COMBAT } from "../shared/match";
+import { chaosModifierFor, modifierName, COMBAT, TIMINGS } from "../shared/match";
 import {
   BUTTON,
   decodeSnapshot,
@@ -50,10 +50,10 @@ import { Voice } from "./audio/voice";
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 $("app").innerHTML = `<div id="world"></div><div id="shade" class="shade"></div>
-<header class="topbar"><button id="about-button" class="brand" aria-label="About BassSpace Brawl"><span class="brand-mark"><svg viewBox="0 0 192 192" aria-hidden="true"><rect x="17" y="17" width="158" height="158" rx="46" fill="#2b2545" transform="rotate(-11 96 96)"/><g stroke="#c9f24f" stroke-width="13" stroke-linecap="round" fill="none"><path d="M107.8 62.6A52 52 0 0 1 107.8 129.4"/><path d="M133.5 50.1A80 80 0 0 1 133.5 141.9"/></g><circle cx="68" cy="96" r="30" fill="#c9f24f"/><circle cx="68" cy="96" r="13" fill="#2b2545"/></svg></span><span class="brand-word">bassspace <b>brawl</b></span><small></small></button><div id="top-actions" class="top-actions"><span id="net-mode" class="pill net-mode" hidden><i class="dot"></i> <span id="net-mode-text"></span></span><button id="help-button" class="icon-button" aria-label="Controls and help">?</button></div></header>
+<header class="topbar"><button id="about-button" class="brand" aria-label="About BassSpace Brawl"><span class="brand-mark"><svg viewBox="0 0 192 192" aria-hidden="true"><rect x="17" y="17" width="158" height="158" rx="46" fill="#2b2545" transform="rotate(-11 96 96)"/><g stroke="#c9f24f" stroke-width="13" stroke-linecap="round" fill="none"><path d="M107.8 62.6A52 52 0 0 1 107.8 129.4"/><path d="M133.5 50.1A80 80 0 0 1 133.5 141.9"/></g><circle cx="68" cy="96" r="30" fill="#c9f24f"/><circle cx="68" cy="96" r="13" fill="#2b2545"/></svg></span><span class="brand-word">bassspace <b>brawl</b></span><small></small></button><div id="top-actions" class="top-actions"><span id="net-mode" class="pill net-mode" hidden><i class="dot"></i> <span id="net-mode-text"></span></span><button id="theme-button" class="icon-button" aria-label="Dark mode">☾</button><button id="help-button" class="icon-button" aria-label="Controls and help">?</button></div></header>
 <main id="lobby" class="lobby"><div class="eyebrow">2–8 players · an arena shaped by the room code</div><h1><span class="line"><span>Turn the bass up.</span></span><span class="line"><span>Throw them <em>out.</em></span></span></h1><p class="intro">Shove guns, throwable furniture and upgrades that break every round.<br>Built with Three.js, Rapier physics, and proximity voice.</p><a class="github-button" href="https://github.com/larshurrelb/friendslop-base" target="_blank" rel="noopener noreferrer" aria-label="Get BassSpace Brawl on GitHub">Get it on GitHub <span class="github-arrow" aria-hidden="true">↗</span></a><form id="entry" class="entry-card"><label for="name">WHAT SHOULD WE CALL YOU?</label><div class="name-input"><div class="avatar-chip">✳</div><input id="name" aria-label="Your name" autocomplete="nickname" maxlength="20" placeholder="Your name" required value="Guest"></div><button class="primary" id="create" type="submit">Create a room <span>↗</span></button><div class="separator">or find your friends</div><div class="join-row"><input id="join-code" aria-label="Room code" placeholder="ROOM CODE" maxlength="6" autocomplete="off"><button id="join" type="button">Join →</button></div><div class="entry-note">No accounts. Just a room code.</div><p id="entry-error" class="error" hidden></p></form><div class="lobby-foot"><span>2–8 players</span><span>Proximity voice</span><span>Cards between rounds</span></div><p class="mobile-notice">A keyboard and mouse are required to play.</p></main>
 <footer id="footer" class="footer"><span>Every round makes the brawl worse.</span><span class="version">BASSSPACE BRAWL &nbsp; / &nbsp; v0.1</span></footer>
-<div id="hud" class="hud" hidden><div class="room-bar"><div><small>YOUR ROOM</small><span id="room-code" class="room-code">------</span></div><button id="copy-room" aria-label="Copy room invite">Copy invite ↗</button><span id="player-count" class="count">1 / 8</span><span id="match-timer" class="count"></span><span id="bucks" class="count" title="Bucks — win rounds to earn more">💰 0</span><span id="health" class="count health" title="Your health — zero or out of bounds ends the round"><b id="health-value">100</b><i class="health-bar" aria-hidden="true"></i></span><select id="mode-select" aria-label="Game mode" hidden><option value="ffa">Free for all</option><option value="teams-2">Teams 2v2</option><option value="teams-3">Teams 3v3</option><option value="teams-4">Teams 4v4</option><option value="king">King of the Yard</option><option value="chaos">Chaos Mode</option></select><button id="ready-button">Ready up</button></div><div id="ammo" class="ammo" hidden></div><div id="crosshair" class="crosshair"></div><div id="shield-gauge" class="shield-gauge" hidden></div><div id="hitflash" class="hitflash"></div><div id="interact" class="interact" hidden></div><div class="bottom-left"><span class="zone-icon">◈</span><div><div id="zone-name" class="zone-name">The stage</div><div id="zone-desc" class="zone-desc">CENTER RING · OPEN SKY</div></div></div><div class="voice-controls"><button id="enable-voice">Enable voice</button><button id="mute" hidden aria-label="Mute microphone">Mic on</button><select id="voice-mode" aria-label="Microphone mode"><option value="open">Open mic</option><option value="ptt">Push to talk</option></select><span id="speaking-light" class="speaking-light"></span></div><div class="bottom-right"><button id="locker-button">Locker <span>✦</span></button><button id="friends-button">Friends <span id="friend-number">1</span></button><button id="debug-button">Diagnostics <span>⌁</span></button></div><div id="pause" class="pause"><div class="eyebrow" style="justify-content:center">The stage is open</div><h2>Break something.</h2><p>Test the weapons and break the furniture.<br>Then ready up and start the brawl.</p><button id="resume" class="primary">Click to explore →</button><small>WASD to move · Mouse to look · Esc to pause</small></div><div id="countdown" class="countdown" hidden></div><div id="round-banner" class="banner" hidden></div><div id="build" class="build" hidden><div class="eyebrow" id="build-title">CHOOSE AN UPGRADE</div><div id="build-cards" class="build-cards"></div><div id="build-taken" class="build-taken" hidden></div></div></div>
+<div id="hud" class="hud" hidden><div class="room-bar"><div><small>YOUR ROOM</small><span id="room-code" class="room-code">------</span></div><button id="copy-room" aria-label="Copy room invite">Copy invite ↗</button><span id="player-count" class="count">1 / 8</span><span id="match-timer" class="count"></span><span id="bucks" class="count" title="Bucks — win rounds to earn more">💰 0</span><span id="health" class="count health" title="Your health — zero or out of bounds ends the round"><b id="health-value">100</b><i class="health-bar" aria-hidden="true"></i></span><select id="mode-select" aria-label="Game mode" hidden><option value="ffa">Free for all</option><option value="teams-2">Teams 2v2</option><option value="teams-3">Teams 3v3</option><option value="teams-4">Teams 4v4</option><option value="king">King of the Yard</option><option value="chaos">Chaos Mode</option></select><span id="timings" class="timings" hidden><label title="How long a round lasts">Round <select id="round-seconds" aria-label="Round length"></select></label><label title="How long you get to read the cards">Cards <select id="card-seconds" aria-label="Card decision time"></select></label></span><button id="ready-button">Ready up</button></div><div id="ammo" class="ammo" hidden></div><div id="crosshair" class="crosshair"></div><div id="shield-gauge" class="shield-gauge" hidden></div><div id="hitflash" class="hitflash"></div><div id="interact" class="interact" hidden></div><div class="bottom-left"><span class="zone-icon">◈</span><div><div id="zone-name" class="zone-name">The stage</div><div id="zone-desc" class="zone-desc">CENTER RING · OPEN SKY</div></div></div><div class="voice-controls"><button id="enable-voice">Enable voice</button><button id="mute" hidden aria-label="Mute microphone">Mic on</button><select id="voice-mode" aria-label="Microphone mode"><option value="open">Open mic</option><option value="ptt">Push to talk</option></select><span id="speaking-light" class="speaking-light"></span></div><div class="bottom-right"><button id="locker-button">Locker <span>✦</span></button><button id="friends-button">Friends <span id="friend-number">1</span></button><button id="debug-button">Diagnostics <span>⌁</span></button></div><div id="pause" class="pause"><div class="eyebrow" style="justify-content:center">The stage is open</div><h2>Break something.</h2><p>Test the weapons and break the furniture.<br>Then ready up and start the brawl.</p><button id="resume" class="primary">Click to explore →</button><small>WASD to move · Mouse to look · Esc to pause</small></div><div id="countdown" class="countdown" hidden></div><div id="round-banner" class="banner" hidden></div><div id="build" class="build" hidden><div class="eyebrow" id="build-title">CHOOSE AN UPGRADE</div><div id="build-cards" class="build-cards"></div><div id="build-taken" class="build-taken" hidden></div></div></div>
 <aside id="friends" class="drawer" hidden><button class="close" data-close="friends" aria-label="Close friends">×</button><h3>In good company</h3><div id="member-list"></div><button id="solo-tab" class="primary">Open a second player <span>↗</span></button><p class="debug-note">Test solo in another tab. Use headphones when testing microphones.</p><button id="leave" class="primary" style="background:transparent;color:#8f88ad;border-color:#cfcbdd">Leave room</button></aside>
 <aside id="debug" class="drawer" hidden><button class="close" data-close="debug" aria-label="Close diagnostics">×</button><h3>Under the hood</h3><div id="metrics" class="metrics"></div><div id="peer-debug"></div><p id="codec-status" class="debug-note"></p><p id="net-detail" class="debug-note"></p></aside>
 <aside id="help" class="drawer" hidden><button class="close" data-close="help" aria-label="Close help">×</button><h3>A little field guide</h3><div class="help-grid"><div><kbd class="key">W A S D</kbd></div><span>Move around</span><div><kbd class="key">Mouse</kbd></div><span>Look around</span><div><kbd class="key">Tab</kbd></div><span>First / third person</span><div><kbd class="key">Shift</kbd></div><span>Sprint</span><div><kbd class="key">Ctrl / C</kbd></div><span>Crouch</span><div><kbd class="key">Space</kbd></div><span>Jump</span><div><kbd class="key">E</kbd></div><span>Pick up / drop</span><div><kbd class="key">Q</kbd></div><span>Throw held object</span><div><kbd class="key">B</kbd></div><span>Air dash (with the card)</span><div><kbd class="key">1 – 4</kbd></div><span>Play a bound emote</span><div><kbd class="key">Click / F</kbd></div><span>Fire, swing or honk</span><div><kbd class="key">Right click</kbd></div><span>Raise shield bubble — deflects shots and throws; 4 s cooldown</span><div><kbd class="key">V</kbd></div><span>Push to talk</span><div><kbd class="key">M</kbd></div><span>Mute microphone</span><div><kbd class="key">Esc</kbd></div><span>Release mouse</span></div><p class="about-copy">Voices carry across the open sky; the void under the stage carries nothing back.</p><p class="about-copy">Bounce pads fling you onto the perches. Hits drain health and launch you — the edge of the stage and the void below finish the job.</p></aside>
@@ -157,6 +157,11 @@ let match: {
   teams?: Record<string, number>;
   king?: number;
   modifier?: string;
+  /** The room owner's id: only their copy of the lobby clocks is enabled. */
+  host?: number;
+  /** Lobby-settable clocks in seconds — round length and card decision time. */
+  roundSeconds?: number;
+  cardSeconds?: number;
 } | null = null,
   matchUi = "",
   // The card buttons keep their own memo: the countdown ticks the outer key
@@ -236,6 +241,20 @@ $("join-code").setAttribute("value", params.get("room") ?? "");
 if (localStorage.getItem("friendslop:name"))
   $("name").setAttribute("value", localStorage.getItem("friendslop:name")!);
 if (params.get("name")) $("name").setAttribute("value", params.get("name")!);
+// Light or dark chrome. The arena is already night-lit, so this only recolours
+// the interface; the choice rides localStorage like the name and the locker,
+// and `style.css` swaps its tokens when <body> carries `.dark`.
+function setTheme(dark: boolean) {
+  document.body.classList.toggle("dark", dark);
+  localStorage.setItem("bassspace:theme", dark ? "dark" : "light");
+  const button = $("theme-button");
+  button.textContent = dark ? "☀" : "☾";
+  button.setAttribute("aria-label", dark ? "Light mode" : "Dark mode");
+}
+setTheme(localStorage.getItem("bassspace:theme") === "dark");
+$("theme-button").addEventListener("click", () =>
+  setTheme(!document.body.classList.contains("dark")),
+);
 if (params.has("fresh")) {
   sessionStorage.removeItem("friendslop:session");
   const clean = new URL(location.href);
@@ -246,8 +265,9 @@ const movementSounds = new MovementSounds((position, kind) => voice.spatial?.eff
 function setPlaying(value: boolean) {
   movementSounds.clear();
   document.body.classList.toggle("playing", value);
-  for (const name of ["lobby", "shade", "footer", "top-actions"])
-    $(name).hidden = value;
+  // The lobby, its shade and the footer step out; the topbar stays, because
+  // help and the theme toggle are things you want mid-round too.
+  for (const name of ["lobby", "shade", "footer"]) $(name).hidden = value;
   $("hud").hidden = !value;
   scene.setPlaying(value);
   if (value) $("pause").hidden = false;
@@ -428,6 +448,12 @@ async function connect() {
             : "none";
         sim?.setEnv(env);
         scene.setEnv(env);
+        if (m.phase === "countdown") {
+          // Round start resets the field on both sides: the authority has just
+          // done it in its own step, so our prediction world drops the old
+          // round's held gun and puts the furniture back where it belongs.
+          sim?.clearProps();
+        }
         scene.setKing(m.king ?? 0);
         updateMatchUI();
         // Bucks (design doc §18): cosmetic currency, awarded client-side only.
@@ -558,7 +584,7 @@ async function connect() {
         }
       }
       if (m.type === "explosion") {
-        scene.boomAt(m.x, m.y, m.z);
+        scene.boomAt(m.x, m.y, m.z, m.r);
         voice.spatial?.effect({ x: m.x, y: m.y, z: m.z }, "boom");
       }
       if (m.type === "impact") {
@@ -979,10 +1005,17 @@ addEventListener("keydown", (e) => {
 // A right-click arms the shield exactly once: the next input packet carries
 // the raise, and the authority decides everything else about it.
 let blockArmed = false;
+// Full-auto guns keep pulling the trigger while the left button is down.
+let triggerHeld = false;
 addEventListener("mousedown", (e) => {
-  if (e.button === 0 && connected && document.pointerLockElement) fire();
-  else if (e.button === 2 && connected && document.pointerLockElement)
+  if (e.button === 0 && connected && document.pointerLockElement) {
+    fire();
+    triggerHeld = true;
+  } else if (e.button === 2 && connected && document.pointerLockElement)
     blockArmed = true;
+});
+addEventListener("mouseup", (e) => {
+  if (e.button === 0) triggerHeld = false;
 });
 addEventListener("keyup", (e) => {
   keys.delete(e.code);
@@ -990,6 +1023,7 @@ addEventListener("keyup", (e) => {
 });
 addEventListener("blur", () => {
   keys.clear();
+  triggerHeld = false;
   voice.setTalk(false);
 });
 $("enable-voice").onclick = () =>
@@ -1007,6 +1041,28 @@ $("mode-select").onchange = () => {
   if (!connected) return;
   send({ type: "mode", mode: $<HTMLSelectElement>("mode-select").value });
 };
+// The two lobby clocks. Options come from `TIMINGS` so the picker can offer
+// exactly what the authority will accept; the values themselves come back on
+// the match broadcast, and only the room owner's copy is enabled.
+const clockOptions = (bound: { min: number; max: number }, step: number) =>
+  Array.from({ length: Math.floor((bound.max - bound.min) / step) + 1 }, (_, i) => bound.min + i * step);
+for (const [name, bound, step] of [
+  ["round-seconds", TIMINGS.round, 15],
+  ["card-seconds", TIMINGS.card, 5],
+] as const) {
+  const select = $(name) as HTMLSelectElement;
+  select.innerHTML = clockOptions(bound, step)
+    .map((s) => `<option value="${s}">${s >= 60 ? `${s / 60} min` : `${s} s`}</option>`)
+    .join("");
+  select.onchange = () => {
+    if (!connected) return;
+    send({
+      type: "timings",
+      round: Number($<HTMLSelectElement>("round-seconds").value),
+      card: Number($<HTMLSelectElement>("card-seconds").value),
+    });
+  };
+}
 for (const name of ["friends", "debug", "help", "about", "locker"]) {
   $(`${name}-button`).onclick = () => {
     const open = $(name).hidden;
@@ -1248,6 +1304,9 @@ function updateMatchUI() {
     JSON.stringify(match.teams ?? {}),
     match.king ?? 0,
     match.modifier ?? "",
+    match.host ?? 0,
+    match.roundSeconds ?? 0,
+    match.cardSeconds ?? 0,
   ].join("|");
   if (key === matchUi) return;
   matchUi = key;
@@ -1259,6 +1318,21 @@ function updateMatchUI() {
     select.hidden = false;
     select.value = match.mode ?? "ffa";
   } else select.hidden = true;
+  // The clocks are lobby-only too, and only the room owner's copies accept
+  // input; everyone else reads the values the authority just broadcast.
+  const clocks = $("timings");
+  if (match.phase === "lobby") {
+    const owner = match.host === id;
+    clocks.hidden = false;
+    ($("round-seconds") as HTMLSelectElement).value = String(
+      match.roundSeconds ?? TIMINGS.round.def,
+    );
+    ($("card-seconds") as HTMLSelectElement).value = String(
+      match.cardSeconds ?? TIMINGS.card.def,
+    );
+    ($("round-seconds") as HTMLSelectElement).disabled = !owner;
+    ($("card-seconds") as HTMLSelectElement).disabled = !owner;
+  } else clocks.hidden = true;
   if (match.phase === "countdown") {
     $("countdown").hidden = false;
     $("countdown").textContent = String(Math.ceil(seconds / 60));
@@ -1499,6 +1573,13 @@ function frame(now: number) {
     // them in both seats: `viewmodel` hides the group for third person, where
     // the hinged rig is what you watch swing.
     scene.viewmodel(s, dt, members.find((m) => m.id === id)?.color ?? id - 1);
+    // Full-auto: a held left button keeps pulling the trigger. `fire()` refuses
+    // until the gun's own cooldown has passed, and a gun without `auto` ignores
+    // the flag entirely, so a click is still exactly one shot.
+    if (triggerHeld && document.pointerLockElement) {
+      const held = kindOf(s.held);
+      if (isGun(held) && GUNS[held].auto) fire();
+    }
     const targetTime = now - 100;
     let a = snapshots[0],
       b = snapshots.at(-1);

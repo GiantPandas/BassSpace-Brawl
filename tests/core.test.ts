@@ -432,6 +432,107 @@ test("a round that keeps bouncing pays a person once and does not tow them", () 
   assert.ok(sim.players.has(2), "the victim is still in the round");
   sim.dispose();
 });
+/** Stand a player at (x, y, z) with their eye ray on `p`, then tick once, so
+ *  the aim `pickup()` validates against is the one they actually have. */
+function aimAt(
+  sim: Simulation,
+  c: Parameters<Simulation["restore"]>[0],
+  p: { x: number; y: number; z: number },
+  x: number,
+  y: number,
+  z: number,
+) {
+  const dx = p.x - x,
+    dy = p.y - (y + 0.65),
+    dz = p.z - z,
+    d = Math.hypot(dx, dy, dz);
+  sim.restore(c, {
+    ...c.state,
+    x,
+    y,
+    z,
+    yaw: Math.atan2(-dx, -dz),
+    pitch: Math.asin(-dy / d),
+  });
+  sim.step();
+}
+test("only the buzz gun keeps firing while the trigger is held", () => {
+  assert.equal(GUNS.smg.auto, true, "the buzz gun is full-auto");
+  for (const kind of ["gun", "shotgun", "rifle", "launcher", "seeker"] as const)
+    assert.ok(!GUNS[kind].auto, `${kind} fires one shot per pull`);
+  // The gate a held button leans on: one shot per cooldown, no more.
+  const sim = new Simulation(), shooter = sim.addPlayer(1);
+  const smg = sim.arena.props.findIndex((p) => p.kind === "smg") + 1;
+  sim.props.get(smg)!.setTranslation({ x: 0, y: 0.5, z: 2 }, true);
+  for (let i = 0; i < 60; i++) sim.step();
+  // The eye ray has to actually hit it, so aim at where it settled.
+  const rest = sim.props.get(smg)!.translation();
+  aimAt(sim, shooter, rest, 0, 0.87, 3.5);
+  assert.equal(sim.pickup(1, smg), true);
+  sim.restore(shooter, { ...shooter.state, pitch: 0, held: smg });
+  sim.step();
+  assert.ok(sim.shoot(1), "the first pull goes");
+  assert.equal(sim.shoot(1), null, "the same tick cannot fire again");
+  for (let i = 0; i < GUNS.smg.cooldown; i++) sim.step();
+  assert.ok(sim.shoot(1), "and the next cooldown window is a fresh shot");
+  sim.dispose();
+});
+test("a shield-blocked seeker round goes back for whoever fired it", () => {
+  const sim = new Simulation(),
+    shooter = sim.addPlayer(1),
+    guard = sim.addPlayer(2);
+  const seeker = sim.arena.props.findIndex((p) => p.kind === "seeker") + 1;
+  sim.props.get(seeker)!.setTranslation({ x: 0, y: 0.5, z: 2 }, true);
+  for (let i = 0; i < 60; i++) sim.step();
+  sim.restore(guard, { ...guard.state, x: 0, y: 0.87, z: -1, yaw: Math.PI });
+  aimAt(sim, shooter, sim.props.get(seeker)!.translation(), 0, 0.87, 3.5);
+  assert.equal(sim.pickup(1, seeker), true);
+  sim.restore(shooter, { ...shooter.state, pitch: 0, held: seeker });
+  sim.step();
+  const shot = sim.shoot(1);
+  assert.ok(shot && shot.pellet !== undefined, "the round is live");
+  const id = shot.pellet!;
+  guard.state.block = COMBAT.blockTicks; // the shield is up when it arrives
+  let rehunted = false;
+  for (let i = 0; i < 150 && sim.pellets.has(id); i++) {
+    sim.step();
+    if (sim.pellets.get(id)?.hunts === 1) rehunted = true;
+  }
+  assert.ok(rehunted, "the deflection retargets the shooter, not the shield");
+  sim.dispose();
+});
+test("a prop off the edge of the arena is gone, and the round gate brings it back", () => {
+  const sim = new Simulation();
+  sim.addPlayer(1);
+  // Any arena prop will do; the first one is guaranteed to exist.
+  const crate = 1;
+  // 200 m out is past the bounds of every arena this generator can build.
+  sim.props.get(crate)!.setTranslation({ x: 200, y: 1, z: 0 }, true);
+  sim.step();
+  assert.ok(!sim.props.has(crate), "outside the bounds retires it");
+  assert.deepEqual(sim.dropEvents, [crate], "clients hear to stop drawing it");
+  const built = sim.arena.props[crate - 1];
+  sim.clearProps();
+  const back = sim.props.get(crate)!.translation();
+  assert.ok(
+    Math.abs(back.x - built.p[0]) < 0.02 && Math.abs(back.z - built.p[2]) < 0.02,
+    "the next round's clear puts it back on its build pad",
+  );
+  assert.ok(back.y >= built.p[1] - 0.01, "and it is standing on the pad, not sunk into it");
+  sim.dispose();
+});
+test("the round gate clears sky guns and empties every hand", () => {
+  const sim = new Simulation(), player = sim.addPlayer(1);
+  const drop = sim.spawnDrop("smg", { x: 0, y: 4, z: 0 });
+  sim.step();
+  assert.ok(sim.drops.has(drop), "a gun from the sky is a drop, not an arena prop");
+  sim.owners.set(drop, 1);
+  player.state.held = drop;
+  assert.deepEqual(sim.clearProps(), [drop], "it is retired and reported once");
+  assert.equal(sim.drops.size, 0, "no supply crate survives the gate");
+  assert.equal(player.state.held, 0, "nobody starts a round holding something");
+  sim.dispose();
+});
 test("ammo runs dry, the reload refills it, and R starts it early", () => {
   const sim = new Simulation(),
     shooter = sim.addPlayer(1);

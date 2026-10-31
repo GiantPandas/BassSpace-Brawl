@@ -4,12 +4,14 @@ import {
   AUTO_RANGE,
   DOOR_SLAM,
   DOOR_TRAVEL,
+  DASH,
   FIST,
   GUNS,
   HAND_ANCHOR,
   HORN,
   IMPACT,
   MELEE_BOOM,
+  ROCKET_LEGS,
   STEP,
   THROW,
   TINY_ARENA,
@@ -123,6 +125,11 @@ export type Pellet = {
   hits: Set<number>;
   /** Collider radius, so a round that survives a player can be put outside them. */
   radius: number;
+  /** A shield threw this round back at the player who fired it, and homing has
+   *  to keep aiming there. `nearestPlayer` skips the shooter on purpose, so a
+   *  deflected seeker would otherwise bend away from the one person it is now
+   *  pointed at. */
+  hunts: number | null;
 };
 export type Swing = { id: number; object: number; hit: number };
 /** Per-kind default restitutions; chaos "bounce" overrides them all. */
@@ -197,7 +204,7 @@ export class Simulation {
    * them and every client stops drawing them. */
   dropEvents: number[] = [];
   /** Chaos explosions since the last drain (authority only). */
-  explosionEvents: { x: number; y: number; z: number }[] = [];
+  explosionEvents: { x: number; y: number; z: number; r?: number }[] = [];
   /** Impacts worth hearing since the last drain (authority only, design doc §17). */
   impactEvents: { x: number; y: number; z: number; s: number }[] = [];
   /**
@@ -219,6 +226,9 @@ export class Simulation {
   >();
   /** Players who already spent their air-dash on the current airborne arc. */
   private dashed = new Set<number>();
+  /** The burst each dash is still carrying: direction plus the ticks left. It
+   *  is derived from inputs on both sides, so it never rides the wire. */
+  private dashBoost = new Map<number, { x: number; z: number; ticks: number }>();
   /** Active env modifier ("none" off); host and clients both apply it. */
   env = "none";
   private cooldowns = new Map<number, number>();
@@ -286,24 +296,7 @@ export class Simulation {
         slammed: new Set(),
       });
     }
-    arena.props.forEach((prop, i) => {
-      const body = this.world.createRigidBody(
-        (prediction
-          ? RAPIER.RigidBodyDesc.kinematicPositionBased()
-          : RAPIER.RigidBodyDesc.dynamic()
-        )
-          .setTranslation(...prop.p)
-          .setLinearDamping(0.6)
-          .setAngularDamping(0.8)
-          .setCcdEnabled(true),
-      );
-      const collider = this.world.createCollider(shape(prop.kind), body);
-      this.propColliders.set(i + 1, collider);
-      collider.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
-      this.props.set(i + 1, body);
-      this.owners.set(i + 1, 0);
-      this.entities.set(collider.handle, { kind: "prop", id: i + 1, body });
-    });
+    arena.props.forEach((prop, i) => this.createProp(i + 1, prop.kind, prop.p));
     // Panes are heavy dynamic bodies so they raise events against player KCCs,
     // exactly like pellets do; gravity is off and step() pins them in place.
     for (const def of arena.windows) {
@@ -393,6 +386,7 @@ export class Simulation {
     this.meleeCooldowns.delete(id);
     this.hornCooldowns.delete(id);
     this.dashed.delete(id);
+    this.dashBoost.delete(id);
   }
   motor(c: Character, input: Input) {
     const s = c.state,
@@ -472,8 +466,17 @@ export class Simulation {
       control = s.stagger > 0 ? WEAPON.control : 1,
       slick = (s.flags & 1) && this.env === "slippery";
     const steer = st.steerRate * (slick ? CHAOS.slipFactor : 1);
-    s.vx += (dx - s.vx) * Math.min(1, STEP * steer) * control;
-    s.vz += (dz - s.vz) * Math.min(1, STEP * steer) * control;
+    // A dash outruns your legs. While it lasts the steering aims at the run
+    // speed *plus* the burst, so the burst bleeds off on DASH.ticks instead of
+    // being dragged back to walking speed in four ticks — which is what made
+    // the old `+= 8` impulse unreadable in play.
+    const burst = this.dashBoost.get(s.id) ?? null,
+      fade = burst ? burst.ticks / DASH.ticks : 0;
+    s.vx +=
+      (dx + (burst ? burst.x * fade : 0) - s.vx) * Math.min(1, STEP * steer) * control;
+    s.vz +=
+      (dz + (burst ? burst.z * fade : 0) - s.vz) * Math.min(1, STEP * steer) * control;
+    if (burst && --burst.ticks <= 0) this.dashBoost.delete(s.id);
     if (s.stagger > 0) s.stagger--;
     // Right-click raises the shield for a breath of ticks; the bubble stays
     // up that long whether you move or not, and one raise never stacks.
@@ -487,20 +490,35 @@ export class Simulation {
       if (s.flags & 1) {
         // Grounded jump: the usual one, plus rocket legs' little bang.
         s.vy = st.jumpVel;
-        if (st.rocketLegs)
+        if (st.rocketLegs) {
+          // The blast is the card's whole point, so everyone gets to see the
+          // area it clears. `motor()` runs on both sides, so only the
+          // authority is allowed to announce it.
+          if (!this.prediction)
+            this.explosionEvents.push({
+              x: s.x,
+              y: s.y - 0.85,
+              z: s.z,
+              r: ROCKET_LEGS.radius,
+            });
           for (const p of this.players.values()) {
             const ps = p.state;
             if (p === c || ps.out) continue;
             const dxp = ps.x - s.x,
               dzp = ps.z - s.z,
               dist = Math.hypot(dxp, dzp);
-            if (dist > 2.5 || Math.abs(ps.y - s.y) > 3) continue;
+            if (
+              dist > ROCKET_LEGS.radius ||
+              Math.abs(ps.y - s.y) > ROCKET_LEGS.height
+            )
+              continue;
             const inv = dist < 0.001 ? 0 : 1 / dist;
-            ps.vx += dxp * inv * 7;
-            ps.vz += dzp * inv * 7;
-            ps.vy = Math.max(ps.vy, 0) + 3;
-            ps.stagger = 18;
+            ps.vx += dxp * inv * ROCKET_LEGS.force;
+            ps.vz += dzp * inv * ROCKET_LEGS.force;
+            ps.vy = Math.max(ps.vy, 0) + ROCKET_LEGS.lift;
+            ps.stagger = ROCKET_LEGS.stagger;
           }
+        }
       } else if (st.airJumps > 0 && s.jumps < st.airJumps) {
         // Bunny hop: one extra jump while the air is young.
         s.vy = st.jumpVel;
@@ -525,8 +543,13 @@ export class Simulation {
             ? (-input.x * Math.sin(input.yaw) - input.z * Math.cos(input.yaw)) /
               lx
             : -Math.cos(input.yaw);
-      s.vx += fx * 8;
-      s.vz += fz * 8;
+      s.vx = fx * DASH.speed;
+      s.vz = fz * DASH.speed;
+      this.dashBoost.set(s.id, {
+        x: fx * DASH.speed,
+        z: fz * DASH.speed,
+        ticks: DASH.ticks,
+      });
       this.dashed.add(s.id);
     }
     const g = this.env === "low-gravity" ? CHAOS.lowGravityFactor : 1;
@@ -868,6 +891,7 @@ export class Simulation {
         homing: st.homing || g.homing,
         hits: new Set<number>(),
         radius,
+        hunts: null,
       });
       body.setLinvel(
         { x: dir.x * pace, y: dir.y * pace, z: dir.z * pace },
@@ -1143,6 +1167,57 @@ export class Simulation {
     this.entities.set(collider.handle, { kind: "prop", id: objectId, body });
     return objectId;
   }
+  /** Build one prop body from the arena layout: kinematic on a prediction
+   *  world, dynamic on the authority — the same split the constructor makes.
+   *  Ids are positions in the layout's prop list. */
+  private createProp(id: number, kind: PropKind, p: readonly number[]) {
+    const body = this.world.createRigidBody(
+      (this.prediction
+        ? RAPIER.RigidBodyDesc.kinematicPositionBased()
+        : RAPIER.RigidBodyDesc.dynamic())
+        .setTranslation(p[0], p[1], p[2])
+        .setLinearDamping(0.6)
+        .setAngularDamping(0.8)
+        .setCcdEnabled(true),
+    );
+    const collider = this.world.createCollider(shape(kind), body);
+    collider.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+    this.propColliders.set(id, collider);
+    this.props.set(id, body);
+    this.owners.set(id, 0);
+    this.entities.set(collider.handle, { kind: "prop", id, body });
+  }
+  /**
+   * Round start, run by both sides off the countdown broadcast: nobody holds
+   * anything, sky guns are retired, and the arena's own props drop back onto
+   * where they were built — rebuilt if a throw sent one off the map, because a
+   * fresh round is fought on a clean field. Returns the ids that vanished, so
+   * the host can tell every client to stop drawing them.
+   */
+  clearProps(): number[] {
+    for (const c of this.players.values()) c.state.held = 0;
+    for (const id of [...this.owners.keys()]) this.owners.set(id, 0);
+    const gone: number[] = [];
+    for (const id of [...this.props.keys()]) {
+      if (id < DROP_ID_BASE || id >= PELLET_ID_BASE) continue;
+      if (this.removeDrop(id)) gone.push(id);
+    }
+    for (const [i, prop] of this.arena.props.entries()) {
+      const id = i + 1,
+        body = this.props.get(id);
+      if (!body) {
+        this.createProp(id, prop.kind, prop.p);
+        continue;
+      }
+      // Dropped from just above the spawn, so a prop resting on a shelf does
+      // not pop into the shelf it has to fall through.
+      body.setTranslation({ x: prop.p[0], y: prop.p[1] + 1.5, z: prop.p[2] }, true);
+      body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      this.propMeta.delete(id);
+    }
+    return gone;
+  }
   /** Retire a sky-dropped gun. One in someone's hands is left alone. */
   removeDrop(objectId: number) {
     if (this.owners.get(objectId)) return false;
@@ -1344,17 +1419,13 @@ export class Simulation {
       }
       for (const [id, body] of this.props) {
         if (id >= PELLET_ID_BASE) continue;
-        if (body.translation().y < -8) {
-          if (id >= DROP_ID_BASE) {
-            // A gun that missed every platform has nowhere to come back from:
-            // retire it. One still in someone's hands is theirs to lose.
-            if (this.removeDrop(id)) this.dropEvents.push(id);
-            continue;
-          }
-          const p = this.arena.props[id - 1].p;
-          body.setTranslation({ x: p[0], y: p[1] + 1.5, z: p[2] }, true);
-          body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-          this.propMeta.delete(id);
+        const t = body.translation();
+        // Gone is gone: falling through the floor and sailing out past the
+        // edge of the arena are the same thing to a prop. Anything still owned
+        // belongs to its holder until they let go, and the next round puts the
+        // furniture back (`clearProps` at the round gate).
+        if (t.y < -8 || !this.inArena(t.x, t.z)) {
+          if (this.removeDrop(id)) this.dropEvents.push(id);
         }
       }
       this.steerPellets();
@@ -1530,7 +1601,14 @@ export class Simulation {
       // Players, and only players. With nobody to lock onto the round flies
       // straight: chasing furniture instead would spend it on the first crate
       // in the way, which is what made a lobby shot vanish on the muzzle.
-      const target = this.nearestPlayer(t, p.creator);
+      // A round a shield threw back keeps its lock on the player who fired it —
+      // `nearestPlayer` skips the shooter, so without this a deflected SEEKER
+      // bends toward whoever is next nearest, or flies straight.
+      const wanted = p.hunts === null ? null : this.players.get(p.hunts);
+      const target =
+        wanted && !wanted.state.out
+          ? { x: wanted.state.x, y: wanted.state.y + 0.65, z: wanted.state.z }
+          : this.nearestPlayer(t, p.creator);
       const v = p.body.linvel();
       const cs = Math.hypot(v.x, v.y, v.z);
       if (cs < 0.01 || !target) continue;
@@ -1710,6 +1788,9 @@ export class Simulation {
               live.body.setLinvel(backv, true);
               live.v = live.body.linvel();
               deflect = true;
+              // Homing has to follow it: the round is now aimed at the person who
+              // fired it, and `nearestPlayer` skips that player by design.
+              live.hunts = live.creator;
               // It is aimed at someone else now; the person who blocked it is no
               // longer the round's debt.
               live.hits.clear();
@@ -1902,6 +1983,7 @@ export class Simulation {
     this.meleeCooldowns.delete(s.id);
     this.hornCooldowns.delete(s.id);
     this.dashed.delete(s.id);
+    this.dashBoost.delete(s.id);
     c.collider.setShape(new RAPIER.Capsule(0.55, 0.3));
     c.body.setTranslation({ x: s.x, y: s.y, z: s.z }, true);
     c.body.setNextKinematicTranslation({ x: s.x, y: s.y, z: s.z });

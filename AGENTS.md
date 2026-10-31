@@ -165,9 +165,21 @@ a `ball` or the junk — `crate`, `chair`, `table`, `trashcan`, `bottle` and
 `bucket`; the id is still the index + 1. The kind picks the
 collider (a ball is a bouncy sphere with `CoefficientCombineRule.Max`), the mesh,
 and how it is carried. Kinds are static and never travel on the wire.
+Anything thrown past the arena's edge — outside `Simulation.inArena`, or below
+`y = −8` — is retired by the sweep in `step()` through `removeDrop()`, which
+works for the arena's own props as well as sky drops and tells the room with
+`{type:"airdrop-gone", ids}`. Base props are no longer teleported back to their
+spawn: the round gate rebuilds them. `Simulation.clearProps()` is that gate —
+it empties every hand, retires every prop and sky gun, and recreates the
+arena's `props` at their authored positions — called from the host's
+`startCountdown()` and mirrored by the client's countdown hook so meshes leave
+with the bodies.
 
 **Shooting.** A gun fires with left click or `F`, on a tick timer the server
-owns. `GUNS` in `level.ts` is the whole arsenal: one entry per gun kind with its
+owns. A gun with `auto: true` (the smg) keeps pulling the trigger while the left
+mouse button is held: the client repeats `fire()` under the gun's own cooldown
+gate and the authority still decides every shot, so releasing the button, losing
+pointer lock or blurring the window ends the line. `GUNS` in `level.ts` is the whole arsenal: one entry per gun kind with its
 range, cooldown, magazine, reload, pellet speed and lifetime, pellets per shot
 and spread, knock, lift, damage scale, stagger, recoil, blast, radius, hold pose,
 muzzle offset, collider and sound. Each gun also carries `reloads` spare
@@ -187,7 +199,9 @@ and capped at
 who it has already paid for, a repeat contact ends the round instead of shoving
 them again, and a round that survives a person is moved outside their capsule
 (`Simulation.clearPlayer`) so the solver cannot tow them across the yard. A
-player is eliminated — zero HP or out of bounds — and
+seeker round stopped by a raised shield is not absorbed either: the deflect
+writes `Pellet.hunts` back to the round's `creator`, so it turns and comes after
+whoever fired it. A player is eliminated — zero HP or out of bounds — and
 goes inert until the next respawn (see `BassSPace Brawl Design Doc.txt`). The
 accepted shot is broadcast for tracers and sound; the shooter draws its own
 tracer immediately and ignores the echo. Rounds are drawn by dead reckoning from
@@ -224,6 +238,12 @@ the server's timer rides the snapshot (`pool` u8). Sprinkler patches (`SLIP`)
 cut steering while grounded. The explosive grill booms authority-only every
 `GRILL.period` ticks: a radial shove + HP drain that clients learn about from a
 `grill` message and feel through the next snapshot's velocity/HP/stagger.
+Rocket legs (`ROCKET_LEGS`) turns a jump into a blast: the jumper is thrown up
+and everyone inside `radius` metres of their feet is shoved and staggered. The
+authority pushes `{x, y, z, r}` onto `explosionEvents` (the grill and the chaos
+random-boom push no `r`), the host relays `{type:"explosion", x, y, z, r}`, and
+`GameScene.boomAt` draws a flash plus a flat ring exactly `r` metres wide — the
+area of effect, visible to every player before the shove lands.
 
 **Match.** `createHost` runs the match machine (`lobby → build → countdown →
 round → break → … → match-end`): it starts when at least two connected members are all
@@ -241,8 +261,15 @@ is auto-stacked with an extra card every break and is the only one who can win
 a round; a departing king is re-drawn. Chaos Mode derives one global
 environmental modifier per round from room code + round on **both** sides
 (`chaosModifierFor` → `Simulation.setEnv`), so no physics state crosses the
-wire — except `{type:"explosion", x, y, z}` for the random-boom modifier, which
-broadcasts like the grill.
+wire — except `{type:"explosion", x, y, z, r?}` for the random-boom modifier,
+which broadcasts like the grill. The room's owner sets the round length and the
+card decision time from the lobby with `{type:"timings", round, card}` in
+seconds: `TIMINGS` in `match.ts` holds both bounds and `timedSeconds()` clamps,
+so the client's pickers (`#round-seconds`, `#card-seconds`) and the authority
+read the same numbers and a hostile client cannot stall a match. Only the host's
+write counts, and only while the phase is `lobby`; the room keeps `roundTicks`
+and `cardTicks`, and `matchInfo` carries `host`, `roundSeconds` and
+`cardSeconds` so the pickers are enabled for the owner and show real values.
 
 **Voice.** Two transports through one spatial emitter per peer: native WebRTC
 (STUN only, lower id offers) and a server relay of raw 20 ms Opus frames over
@@ -350,9 +377,12 @@ you are in.
 | Move spawns / props | `SPAWNS`, `PROPS` in `level.ts` | Eight spawns; prop ids are index + 1. Give a prop a kind: a gun kind (`gun`, `smg`, `shotgun`, `rifle`, `launcher`, `seeker`), `ball`, `crate`, `bat`, `horn` or junk. Props must rest on solid ground — an unsupported prop falls into the void and makes noise. |
 | Add a prop kind | `PROPS`/`PropKind` in `level.ts`, `shape()`+`PROP_BOUNCE` in `simulation.ts`, `propMesh()` in `scene.ts` | Keep children[0] of the mesh group the tintable body — `setHighlight` writes its emissive. Guns additionally need a `GUNS` entry. |
 | Add or move a door | `DOORS` in `level.ts` | Leaves slide from `p` to `p + slide`; mount them in front of the wall they cover. `auto` makes them open on approach. |
-| Tune the guns | `GUNS`/`WEAPON` in `level.ts` | Per kind: range, cooldown, magazine, `reloads` spare magazines behind it, reload, speed, pellets + spread, knock, lift, damage scale, stagger, recoil, blast, `hold` + `grip` (which must match the grip brick in `propMesh()`), muzzle offset, collider, sound. `WEAPON` keeps the pistol's numbers and the shared globals (spread, homing steer). Rounds belong to the gun: `reserve` rides the tick, `AIR.club` is what a spent gun hits a player with. |
+| Tune the guns | `GUNS`/`WEAPON` in `level.ts` | Per kind: range, cooldown, magazine, `reloads` spare magazines behind it, reload, speed, pellets + spread, knock, lift, damage scale, stagger, recoil, blast, `hold` + `grip` (which must match the grip brick in `propMesh()`), muzzle offset, collider, sound, `auto` (a held mouse keeps firing). `WEAPON` keeps the pistol's numbers and the shared globals (spread, homing steer). Rounds belong to the gun: `reserve` rides the tick, `AIR.club` is what a spent gun hits a player with. |
 | Tune supply drops | `AIR` in `level.ts`; `airdrop()` in `host/index.ts`; `spawnDrop()`/`removeDrop()`/`supply()` in `simulation.ts`; `supplyLabels` in `scene.ts` | Drops are props in the 500–999 id band, so they ride the prop channel; the authority owns the position and broadcasts `{type:"airdrop"}` / `{type:"airdrop-gone"}`. Rounds belong to the gun, not the player — a spent gun is a club and the sky is the only refill. |
-| Tune pool / sprinkler / grill hazards | `POOL`, `SLIP`, `GRILL` in `level.ts`; `motor()`/`step()` in `simulation.ts` | Pool entry and launch run in the deterministic motor on both sides; the slip patches cut steering while grounded; the grill booms authority-only. |
+| Tune pool / sprinkler / grill hazards | `POOL`, `SLIP`, `GRILL`, `ROCKET_LEGS` in `level.ts`; `motor()`/`step()` in `simulation.ts` | Pool entry and launch run in the deterministic motor on both sides; the slip patches cut steering while grounded; the grill booms authority-only. Rocket legs' blast is the one blast with a radius on the wire (`explosionEvents` `{x,y,z,r}` → `boomAt`'s ring), and `st.rocketLegs` is networked so both sides jump. |
+| Tune the air dash | `DASH` in `level.ts`; the steering blend and the trigger in `motor()` | The boost is a velocity with a tick countdown, not a decaying impulse — writing an impulse is invisible because steering re-converges to base speed in ~4 ticks. While it runs, steering converges to `base + boost` instead of `base`; clearing `dashBoost` on landing is what stops it. |
+| Change prop despawn or the round-start reset | `inArena()`/`createProp()`/`clearProps()` in `simulation.ts`; `startCountdown()` in `host/index.ts`; the `countdown` hook in `main.ts` | Anything outside `arena.bounds` or below −8 m retires through `removeDrop` (owners drop it first) and rides `{type:"airdrop-gone"}`; base props are rebuilt from `arena.props` by `clearProps()` on BOTH sides — authority at the countdown, client on the phase transition, because snapshots carry positions but never removals. |
+| Change the lobby clocks or chrome | `TIMINGS`/`timedSeconds` in `match.ts`; `room.roundTicks`/`cardTicks` + the `timings` handler in `host/index.ts`; `#round-seconds`/`#card-seconds`, `#theme-button`, `setTheme` in `main.ts`; token block in `style.css` | Clocks are host-written, lobby-only, clamped. Chrome colours are tokens in `:root` with a `body.dark` override — add colours as tokens, not literals; the theme persists in `localStorage["bassspace:theme"]`. |
 | Tune movement | `Simulation.motor()` | Runs identically on both sides. Gravity is set in the Rapier world **and** the motor's vertical acceleration — change both. |
 | Add or tune an upgrade card | `src/shared/upgrades.ts` (`CARDS`, `buildStats`, `IMPLEMENTED_CARDS`), effects in `simulation.ts` `motor()`/`swing()`/`shoot()`, offers in `host/index.ts` `dealOffers()` | One bit per card in `PlayerState.build`; only ids in `IMPLEMENTED_CARDS` may be dealt. Card order is the wire format — don't reorder or remove entries. |
 | Add or tune a game mode | `MODES`/`CHAOS`/`MODIFIERS`/`assignTeams`/`chaosModifierFor` in `src/shared/match.ts`; env physics in `simulation.ts` (`setEnv`, `explosionEvents`); machine in `host/index.ts` (lobby gate, `endRound`, `retire`); UI in `main.ts` + `scene.ts` | Modes ride the JSON `match` broadcast — no binary protocol change. Chaos modifiers must derive identically on both sides from room code + round; keep that pure. UI contract: `#mode-select`, `.team-badge`, `.king-tag`. |

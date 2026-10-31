@@ -147,7 +147,9 @@ knockback, lift and stagger, and drains health in proportion to the pellet's
 pre-bounce speed, scaled by the gun and capped at `COMBAT.maxPerHit`. An armed
 pellet — the launcher's shells, or any round under the EXPLOSIVE card — bursts on
 contact instead of transferring a hit, and the blast is announced once as
-`{type:"explosion", x, y, z}`. A player is eliminated
+`{type:"explosion", x, y, z, r}` — `r` is the radius in metres when the blast has
+one the players should read (rocket legs); the grill and the chaos boom send no
+`r` and get a plain flash. A player is eliminated
 when health reaches zero or it leaves the arena, leaving it inert until the next
 respawn. Every accepted shot is broadcast as `{type:"shot", id, object, x, y, z,
 dx, dy, dz, distance, hit, pellet, ids}` — the muzzle origin and direction the
@@ -246,8 +248,16 @@ The room runs a match machine:
 least two connected members are all ready and re-arms the same way after a match
 ends. A `{type:"ready", active}` message
 toggles one member's flag; the host rebroadcasts the room state as
-`{type:"match", phase, round, rounds, until, ready, winner}` on join, on every
-ready toggle and on each transition. `until` is the server tick the current
+`{type:"match", phase, round, rounds, until, ready, winner, mode, host,
+roundSeconds, cardSeconds}` on join, on every
+ready toggle and on each transition. `host` is the authority's player ID — the
+lobby's two clock `<select>`s are enabled for that member only, and their writes
+come back as a `{type:"timings", round, card}` message the host accepts while
+`phase === "lobby"`: both numbers go through `timedSeconds()` against `TIMINGS`
+(30–180 s round, 5–60 s card, so a hostile payload cannot stall the machine) and
+become `room.roundTicks` / `room.cardTicks`. `roundSeconds` / `cardSeconds` on
+the broadcast are those clocks in seconds, echoed to everyone so the selects show
+the room's real settings. `until` is the server tick the current
 phase ends at (0 in lobby/match-end); clients derive displayed seconds from
 `until − latestTick`. `build` is the upgrade board dealt before round 1, so a
 match is fought with a build from the first round; `break` is the same board

@@ -10,6 +10,7 @@ import {
   type Input,
 } from "../../src/shared/protocol.js";
 import { buildArena } from "../../src/shared/arena.js";
+import { MATCH, TIMINGS } from "../../src/shared/match.js";
 import { AIR, GUNS, type GunKind } from "../../src/shared/level.js";
 let server: http.Server,
   app: Awaited<ReturnType<typeof attachApplication>>,
@@ -435,4 +436,26 @@ test("chaos mode rolls a modifier for the first round", async () => {
   const { match: m } = await startMatch(a, b);
   assert.ok(m.modifier && m.modifier !== "none", "the modifier rides the broadcast");
   assert.equal(app.rooms.get(code)!.sim.env, m.modifier);
+});
+test("the host's lobby clocks set the round and card timers", async () => {
+  const a = await member(),
+    code = a.welcome.code,
+    b = await member(code),
+    room = app.rooms.get(code)!;
+  // A guest cannot move the clocks. The fence is b's own ready flag: the
+  // authority reads everything queued on one socket in order, so seeing b
+  // ready means its timing write has already been answered.
+  b.ws.send(JSON.stringify({ type: "timings", round: 45, card: 6 }));
+  b.ws.send(JSON.stringify({ type: "ready", active: true }));
+  await wait(a.ws, (m) => m.type === "match" && m.ready.includes(b.welcome.id));
+  assert.equal(room.roundTicks, MATCH.roundTicks, "a guest's write is ignored");
+  // The owner's write lands; a hostile value is clamped rather than obeyed.
+  a.ws.send(JSON.stringify({ type: "timings", round: 45, card: 6 }));
+  a.ws.send(JSON.stringify({ type: "timings", round: 1e6, card: 0 }));
+  a.ws.send(JSON.stringify({ type: "ready", active: true }));
+  const m = await wait(a.ws, (x) => x.type === "match" && x.ready.length === 2);
+  assert.equal(room.roundTicks, TIMINGS.round.max * 60, "the clamp bounds a hostile value");
+  assert.equal(room.cardTicks, TIMINGS.card.min * 60);
+  assert.equal(m.roundSeconds, TIMINGS.round.max, "the pickers read the clamped seconds");
+  assert.equal(m.cardSeconds, TIMINGS.card.min);
 });

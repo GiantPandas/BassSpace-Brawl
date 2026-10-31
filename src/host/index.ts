@@ -12,6 +12,8 @@ import { AIR, MAX_PLAYERS, STEP } from "../shared/level.js";
 import { buildArena, groundAt } from "../shared/arena.js";
 import {
   MATCH,
+  TIMINGS,
+  timedSeconds,
   assignTeams,
   chaosModifierFor,
   isMode,
@@ -89,6 +91,11 @@ type Room = {
   match: Match;
   /** The lobby-picked game mode (design doc §13). */
   mode: string;
+  /** Lobby-settable clocks in ticks: how long a round runs and how long the
+   *  cards stay open. Both start at `MATCH`'s values; only the room's owner
+   *  moves them, and only before a round starts. */
+  roundTicks: number;
+  cardTicks: number;
   /** Team modes: member id → 0/1. Empty for the other modes. */
   teams: Map<number, 0 | 1>;
   /** King of the Yard: 0 until drawn, re-drawn if the king leaves. */
@@ -151,6 +158,11 @@ export async function createHost(options: { maxRooms?: number } = {}) {
         .map((m) => m.id),
       winner: r.match.winner,
       mode: r.mode,
+      /** Who owns the lobby settings; the client enables the pickers for them. */
+      host: r.host,
+      /** The lobby-settable clocks in seconds, so the pickers read real values. */
+      roundSeconds: Math.round(r.roundTicks / 60),
+      cardSeconds: Math.round(r.cardTicks / 60),
       teams: r.mode.startsWith("teams-")
         ? Object.fromEntries(
             [...r.teams.entries()].map(([id, t]) => [String(id), t]),
@@ -191,16 +203,16 @@ export async function createHost(options: { maxRooms?: number } = {}) {
   /** Deal cards and hold the arena open while everyone reads them. */
   function startBuild(r: Room) {
     r.match.phase = "build";
-    r.match.until = r.tick + MATCH.buildPhaseTicks;
+    r.match.until = r.tick + r.cardTicks;
     dealOffers(r);
     broadcast(r, matchInfo(r));
   }
   function startCountdown(r: Room) {
     r.sim.respawn();
-    // The sky is empty again for the next round. Anything still falling is
-    // retired; a gun a player kept is theirs now and stays on the ground.
-    const gone: number[] = [];
-    for (const id of [...r.air.keys()]) if (r.sim.removeDrop(id)) gone.push(id);
+    // A new round is fought on a clean field: the arena's furniture goes back
+    // where it was built and every gun that fell out of the sky — or was kept
+    // from the last round — is gone. Clients run the same reset on this phase.
+    const gone = r.sim.clearProps();
     r.air.clear();
     if (gone.length) broadcast(r, { type: "airdrop-gone", ids: gone });
     // Chaos rolls its per-round env modifier; every other mode resets it.
@@ -213,7 +225,7 @@ export async function createHost(options: { maxRooms?: number } = {}) {
   function beginRound(r: Room) {
     r.sim.setEnv(envFor(r));
     r.match.phase = "round";
-    r.match.until = r.tick + MATCH.roundTicks;
+    r.match.until = r.tick + r.roundTicks;
     r.airTick = r.tick;
     broadcast(r, matchInfo(r));
   }
@@ -348,7 +360,7 @@ export async function createHost(options: { maxRooms?: number } = {}) {
       // Build phase: everyone picks a card before the next round starts.
       r.match.round++;
       r.match.phase = "break";
-      r.match.until = r.tick + MATCH.buildPhaseTicks;
+      r.match.until = r.tick + r.cardTicks;
       dealOffers(r);
     }
     broadcast(r, matchInfo(r));
@@ -427,6 +439,8 @@ export async function createHost(options: { maxRooms?: number } = {}) {
         pairs: new Map(),
         match: { phase: "lobby", round: 1, until: 0, winner: 0 },
         mode: "ffa",
+        roundTicks: MATCH.roundTicks,
+        cardTicks: MATCH.buildPhaseTicks,
         teams: new Map(),
         king: 0,
         teamWins: [0, 0],
@@ -591,6 +605,17 @@ export async function createHost(options: { maxRooms?: number } = {}) {
           // The lobby is where the mode is picked; last write wins.
           if (room.match.phase === "lobby" && isMode(msg.mode)) {
             room.mode = msg.mode;
+            broadcast(room, matchInfo(room));
+          }
+          return;
+        }
+        if (msg.type === "timings") {
+          // Room-owner only, and only before the first round: a round in flight
+          // keeps the clock it started with. `TIMINGS` clamps, so a client
+          // cannot stretch a match or make the cards vanish instantly.
+          if (member.id === room.host && room.match.phase === "lobby") {
+            room.roundTicks = timedSeconds(msg.round, TIMINGS.round) * 60;
+            room.cardTicks = timedSeconds(msg.card, TIMINGS.card) * 60;
             broadcast(room, matchInfo(room));
           }
           return;
