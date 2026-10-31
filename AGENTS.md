@@ -190,7 +190,12 @@ them again, and a round that survives a person is moved outside their capsule
 player is eliminated — zero HP or out of bounds — and
 goes inert until the next respawn (see `BassSPace Brawl Design Doc.txt`). The
 accepted shot is broadcast for tracers and sound; the shooter draws its own
-tracer immediately and ignores the echo. Cards override the gun, never the wire:
+tracer immediately and ignores the echo. Rounds are drawn by dead reckoning from
+that broadcast: each snapshot re-bases a flight by moving its clock, never by
+sliding the mesh, and invented flight is capped at a report's age plus one
+snapshot gap (`SNAPSHOT_GAP` in `scene.ts`) — coordinates that stop changing
+mean the round is already spent, so it holds there instead of being pulled back.
+Cards override the gun, never the wire:
 TRIPLE SHOT adds two pellets to any fan, EXPLOSIVE arms any pellet, HOMING
 curves any round, and a pickup loads the gun's own magazine and whatever rounds
 are left inside it — a half-used gun on the floor hands the next player the dregs.

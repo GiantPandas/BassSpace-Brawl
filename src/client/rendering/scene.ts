@@ -51,11 +51,26 @@ const LOOKS: Record<GunKind, Look> = {
   seeker: { color: "#c48bff", size: 1.15, stretch: 2.6, hot: true, shape: "comet" },
 };
 const FALLBACK_LOOK = LOOKS.gun;
-/** Rounds are drawn on the same delayed clock as the rest of the scene: truth
- *  arrives 20 Hz apart and the frame loop renders 100 ms in the past. Flying a
- *  round at wall clock instead puts it ahead of the truth it is about to be
- *  corrected to, and that rubber-band is what reads as judder. */
-const PELLET_LAG = 0.1;
+/** How old the coordinates on the wire are when they land: half a snapshot
+ *  period plus a hop. A round is therefore flown this far past the position it
+ *  was reported at. It used to be folded into the flight timestamp instead,
+ *  which inflated the elapsed time between two reports and cut every derived
+ *  velocity to a third of the truth — the round then lagged its own flight and
+ *  each snapshot hauled the mesh back toward the authority, which is exactly
+ *  what reads as a round flying back where it came from. */
+const REPORT_AGE = 0.06;
+/** How far a round is flown past its last authoritative position. Past this the
+ *  next report simply rebases it, so a round that died between two snapshots
+ *  overshoots by at most this slice of its own flight. */
+const PELLET_EXTRAP = 0.12;
+/**
+ * Snapshots leave the authority every third 1/60 s tick, so two reports of a
+ * live round are 50 ms of *flight* apart however they arrive. Arrival timing is
+ * not a clock: a burst of coalesced packets reads as a long gap, and a round at
+ * 26 m/s gets divided into 10 — the mesh then under-flies and the next report
+ * yanks it forward, or back if the ghost had already gone further.
+ */
+const SNAPSHOT_GAP = 0.05;
 /** Ceiling on the acceleration a round is drawn with. Gravity (≈9.8), a launcher
  *  arc and a seeker's bend all sit far under it; a reconciliation spike divided
  *  by a frame interval shoots way past it, and that is what made a round appear
@@ -375,11 +390,25 @@ export class GameScene {
       vx: number;
       vy: number;
       vz: number;
+      /**
+       * How far the authority says this round flies — the shot line's distance,
+       * which is the impact distance when it hit something. The invented ghost
+       * never flies past it: a round that dies in 50 ms would otherwise be
+       * drawn metres beyond the surface it died at, and the first real report
+       * would then drag the mesh back through its own flight. Dropped as soon
+       * as a report lands, because from then on truth steers the round.
+       */
+      max: number | null;
       ax: number;
       ay: number;
       az: number;
-      /** ms timestamp of the authoritative position above. */
+      /** Extrapolation origin in ms: the instant at which the position above is
+       *  the round's own. `advancePellets` flies it for `now - at`, so rebasing
+       *  a round moves this clock and never the mesh. */
       at: number;
+      /** When this report actually arrived. That is the only honest gap between
+       *  two reports, and the only thing a velocity may be divided by. */
+      rt: number;
       /** The authoritative position this record was last rebased on. A frame
        *  that hands us the same coordinates is interpolation, not news: flying
        *  the round is what fills the gap between those two truths. */
@@ -388,13 +417,6 @@ export class GameScene {
       pz: number;
       /** Painted on the trigger press; the authority has not confirmed it yet. */
       armed: boolean;
-      /** The gap between a trigger-press ghost and the authority's first say so,
-       *  captured at `ot` and eased away over ~80 ms. This is what keeps a shot
-       *  from popping half a metre forward when the next snapshot lands. */
-      ox: number;
-      oy: number;
-      oz: number;
-      ot: number;
       /** big-ball scale, and the gun's own look. */
       size: number;
       look: Look;
@@ -2065,6 +2087,7 @@ export class GameScene {
     kind: GunKind,
     dirs?: { dx: number; dy: number; dz: number }[],
     muzzle?: { x: number; y: number; z: number },
+    distance?: number | null,
   ) {
     const look = LOOKS[kind],
       speed = GUNS[kind].pelletSpeed,
@@ -2099,12 +2122,13 @@ export class GameScene {
         ax: 0,
         ay: 0,
         az: 0,
-        at: muzzle ? now - PELLET_LAG * 1000 : 0,
+        // The shot message says the round exists at the muzzle *now*, so this
+        // clock starts at this frame: it flies on its own speed from here and
+        // the first snapshot rebases its time, never its position.
+        at: muzzle ? now : 0,
+        rt: now,
+        max: distance ?? null,
         armed: true,
-        ox: 0,
-        oy: 0,
-        oz: 0,
-        ot: 0,
         size: look.size,
         look,
       });
@@ -2122,13 +2146,17 @@ export class GameScene {
     for (const [id, m] of this.pellets) {
       const f = this.pelletFlight.get(id);
       if (!f || !f.at) continue;
-      const e = Math.min(0.12, Math.max(0, (performance.now() - f.at) / 1000 - PELLET_LAG));
-      // A round armed on the trigger frame was painted ahead of where truth says
-      // it is; that gap eases away instead of popping at the first snapshot.
-      const k = f.ot ? Math.max(0, 1 - (performance.now() - f.ot) / 80) : 0;
-      const x = f.x + f.vx * e + 0.5 * f.ax * e * e + f.ox * k,
-        y = f.y + f.vy * e + 0.5 * f.ay * e * e + f.oy * k,
-        z = f.z + f.vz * e + 0.5 * f.az * e * e + f.oz * k;
+      let e = Math.min(PELLET_EXTRAP, Math.max(0, (performance.now() - f.at) / 1000));
+      if (f.armed && f.max !== null) {
+        // The shot line already says where this round is doomed to stop.
+        // Drawing it past that point while waiting for the proof is exactly
+        // what the next report then has to undo.
+        const sp = Math.hypot(f.vx, f.vy, f.vz);
+        if (sp > 0.001) e = Math.min(e, f.max / sp);
+      }
+      const x = f.x + f.vx * e + 0.5 * f.ax * e * e,
+        y = f.y + f.vy * e + 0.5 * f.ay * e * e,
+        z = f.z + f.vz * e + 0.5 * f.az * e * e;
       m.position.set(x, y, z);
       const vx = f.vx + f.ax * e,
         vy = f.vy + f.ay * e,
@@ -2174,9 +2202,25 @@ export class GameScene {
         // Frames between snapshots hand us the same 20 Hz truth, merely
         // interpolated. Rebasing on that zeroes the velocity and freezes the
         // round — the judder. Only coordinates that actually moved are news.
-        if (was && Math.hypot(p.x - was.px, p.y - was.py, p.z - was.pz) < 0.002)
+        if (was && Math.hypot(p.x - was.px, p.y - was.py, p.z - was.pz) < 0.002) {
+          // Coordinates that have not moved between two reports mean the round
+          // is no longer flying: it hit something and the next packet drops it.
+          // Settle it where it was already drawn and hold it there — coasting on
+          // the last velocity is what slid a dead round past the thing it hit.
+          const held = Math.min(
+            PELLET_EXTRAP,
+            Math.max(0, (performance.now() - was.at) / 1000),
+          );
+          was.x += was.vx * held + 0.5 * was.ax * held * held;
+          was.y += was.vy * held + 0.5 * was.ay * held * held;
+          was.z += was.vz * held + 0.5 * was.az * held * held;
+          was.vx = was.vy = was.vz = 0;
+          was.ax = was.ay = was.az = 0;
+          was.max = null;
+          was.at = performance.now();
           continue;
-        const dt = was?.at ? (performance.now() - was.at) / 1000 : 0;
+        }
+        const dt = was?.rt ? (performance.now() - was.rt) / 1000 : 0;
         let vx = was?.vx ?? 0,
           vy = was?.vy ?? 0,
           vz = was?.vz ?? 0,
@@ -2188,7 +2232,14 @@ export class GameScene {
         // flies metres away from where it was. Derive acceleration only from a
         // real gap between reports, and cap it: gravity, an arc and a seeker's
         // bend are all well under this, a reconciliation spike is not.
-        if (was && dt > 0.025) {
+        //
+        // A round's first report is not one of those gaps. The muzzle it was
+        // seeded from belongs to the tick the trigger was pulled, not to the
+        // frame the shot message landed, so that pair measures the message's
+        // latency as if it were flight and reads 26 m/s as 10 — the mesh then
+        // gets re-based on a slow velocity and steps back. Until a second
+        // report lands, the shot's own speed and heading are the truth.
+        if (was && !was.armed && dt > 0.025) {
           const nx = (p.x - was.x) / dt,
             ny = (p.y - was.y) / dt,
             nz = (p.z - was.z) / dt;
@@ -2202,16 +2253,34 @@ export class GameScene {
           vy = ny;
           vz = nz;
         }
-        // A trigger-press ghost is a round the authority has only just begun.
-        // Capture the gap between where it was painted and where truth says it
-        // is, and let that gap ease away over ~80 ms. Snapping it instead is the
-        // half-metre pop a shot used to feel at every snapshot.
-        const armed = was?.armed ?? false;
-        const ox = armed ? m.position.x - p.x : 0,
-          oy = armed ? m.position.y - p.y : 0,
-          oz = armed ? m.position.z - p.z : 0,
-          ot = armed ? performance.now() : 0;
-        if (!armed) m.position.set(p.x, p.y, p.z);
+        // Where the eye already sees the round sets the new flight clock: solve
+        // for the slice of flight that puts the round there, then keep flying it
+        // from the packet's position on that clock. Sliding the mesh toward the
+        // packet — what the old trigger-press ease did — is a round visibly
+        // coming back; moving the clock is invisible.
+        //
+        // The lead is capped at what a report can honestly cover: its own age
+        // plus one snapshot gap. A round that hit something kept being flown
+        // until the packet said so, and letting that invented flight grow past
+        // the impact is what the next packet then has to take back. The lead
+        // already contains the report's age — it is measured from where the mesh
+        // is drawn — so subtracting the age again puts `at` in the future
+        // whenever the mesh was lagging, the elapsed clamp reads 0, and the mesh
+        // snaps onto the reported position: a visible backward jump.
+        const sp2 = vx * vx + vy * vy + vz * vz;
+        const e0 = Math.max(
+          0,
+          Math.min(
+            SNAPSHOT_GAP + REPORT_AGE,
+            sp2 > 0.04
+              ? ((m.position.x - p.x) * vx +
+                  (m.position.y - p.y) * vy +
+                  (m.position.z - p.z) * vz) /
+                  sp2
+              : 0,
+          ),
+        );
+        const arrived = performance.now();
         this.pelletFlight.set(p.id, {
           x: p.x,
           y: p.y,
@@ -2222,15 +2291,13 @@ export class GameScene {
           ax,
           ay,
           az,
-          at: performance.now() - PELLET_LAG * 1000,
+          at: arrived - e0 * 1000,
+          rt: arrived,
           px: p.x,
           py: p.y,
           pz: p.z,
           armed: false,
-          ox,
-          oy,
-          oz,
-          ot,
+          max: null,
           size,
           look,
         });
